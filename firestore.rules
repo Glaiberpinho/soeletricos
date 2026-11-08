@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /listings/{listingId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['title', 'description', 'photoUrls', 'ownerUid', 'createdAt'])
+        && request.resource.data.title is string
+        && request.resource.data.description is string
+        && request.resource.data.photoUrls is list
+        && request.resource.data.photoUrls.size() <= 6;
+      allow update, delete: if request.auth != null
+        && request.auth.token.email_verified == true
+        && resource.data.ownerUid == request.auth.uid;
+      match /private/{document} {
+        allow read, write: if request.auth != null
+          && request.auth.token.email_verified == true
+          && get(/databases/$(database)/documents/listings/$(listingId)).data.ownerUid == request.auth.uid;
+      }
+    }
+    match /emailVerificationCodes/{uid} {
+      allow read, write: if false;
+    }
+  }
+}
