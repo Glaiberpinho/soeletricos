@@ -1,65 +1,31 @@
-# Só Elétricos
+# Só Elétricos — Firebase para anúncios, sem e-mails
 
-Portal de classificados de veículos elétricos, desenvolvido com React + Vite, preparado para deploy na Vercel e integração com Firebase.
+O projeto mantém **Firebase Firestore para os dados dos anúncios** e **Firebase Storage para as fotos**. A confirmação por e-mail e o envio de propostas por e-mail foram removidos.
 
-## Rodar localmente
+## Como funciona
+- Cadastro e login demonstrativos ficam no LocalStorage deste navegador (não são contas Firebase).
+- Ao abrir o site, o Firebase cria uma sessão anônima para autorizar gravação segura de anúncios e fotos.
+- Dados dos anúncios e URLs das fotos são gravados no Firestore; arquivos de imagem ficam no Storage.
+- Os anúncios publicados ficam disponíveis para todos os visitantes, em qualquer dispositivo.
+- Propostas ficam registradas somente no LocalStorage do navegador que as enviou. Nenhum e-mail é enviado.
+- Os anúncios de exemplo continuam na vitrine.
 
-1. Instale Node.js (versão 20.19+ ou 22.12+).
-2. Na pasta do projeto, execute `npm install`.
-3. Copie `.env.example` para `.env.local` e preencha as credenciais do Firebase.
-4. Execute `npm run dev`.
+## Configuração obrigatória do Firebase
+1. No Firebase Console, habilite **Authentication → Sign-in method → Anonymous**.
+2. Ative/crie o Firestore Database e o Storage.
+3. Publique as regras dos arquivos `firestore.rules` e `storage.rules` no console Firebase.
+4. Copie as seis configurações do app Web Firebase.
+5. No GitHub, abra **Settings → Secrets and variables → Actions → New repository secret** e crie estes seis secrets: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.
+6. Faça um novo commit para disparar o GitHub Actions e compilar o site com essas configurações.
 
-## Publicar na Vercel
+## Importante
+O login de demonstração é local ao navegador. Ele não protege identidade real nem sincroniza contas. A autenticação anônima do Firebase é usada apenas para controlar quem pode gravar/excluir anúncios e imagens. Como a autenticação anônima pode ser perdida ao limpar os dados do navegador, a propriedade de anúncios publicados pode deixar de estar acessível nessa situação. Propostas não são entregues ao anunciante, pois o envio de e-mail está desativado.
 
-1. Envie esta pasta para um repositório GitHub.
-2. Na Vercel, escolha **Add New → Project** e importe o repositório.
-3. Framework: Vite. Build command: `npm run build`. Output directory: `dist`.
-4. Cadastre na Vercel as mesmas variáveis `VITE_FIREBASE_*` do `.env.local`.
-5. Faça o deploy.
-
-## Firebase necessário
-
-No console Firebase:
-- Crie um projeto.
-- Ative Authentication → Email/Password.
-- Crie Firestore Database.
-- Ative Storage.
-- Cadastre o domínio da Vercel em Authentication → Settings → Authorized domains.
-
-O site funciona em modo de demonstração enquanto as credenciais Firebase não forem configuradas. Nesse modo, os anúncios de exemplo são apenas demonstrativos; cadastro, publicação, upload e envio de propostas exigem Firebase configurado.
-
-## Estrutura dos dados
-
-Coleção pública `listings` (o e-mail fica em subcoleção privada, protegido pelas regras):
-- `title`: título
-- `description`: descrição
-- `photoUrls`: até 6 URLs
-- `ownerUid`: UID do anunciante
-- `createdAt`: data de criação
-
-O projeto inclui Cloud Functions para confirmação por código de 6 dígitos e envio de propostas por e-mail. Configure SMTP antes de publicar as funções. Exemplo de configuração:
-
+## Executar
 ```bash
-cd functions
 npm install
-cd ..
-firebase functions:secrets:set SMTP_USER
-firebase functions:secrets:set SMTP_PASS
-firebase deploy --only functions,firestore:rules,storage
+npm run dev
+npm run build
 ```
 
-Na primeira publicação, o Firebase solicitará os parâmetros `SMTP_HOST`, `SMTP_PORT` e `MAIL_FROM`. Informe os dados do seu provedor de e-mail. Não coloque senhas SMTP no frontend.
-
-
-## Publicar no GitHub Pages
-
-O projeto inclui o workflow `.github/workflows/deploy.yml`. Para usá-lo:
-1. Envie todos os arquivos e pastas do projeto para a raiz do repositório GitHub.
-2. O repositório deve se chamar `soeletricos` para que o caminho configurado no Vite funcione sem alteração. Se tiver outro nome, altere `base` em `vite.config.js` para `'/NOME-DO-REPOSITORIO/'`.
-3. No GitHub, abra **Settings → Pages** e escolha **GitHub Actions** em Build and deployment.
-4. Faça um push na branch `main` ou execute o workflow em **Actions**.
-5. Aguarde o workflow terminar e abra a URL indicada em **Settings → Pages**.
-
-Se o repositório for `usuario.github.io` (repositório de usuário) ou usar domínio próprio, ajuste `base` para `'/'`.
-
-Observação: GitHub Pages hospeda apenas os arquivos do site. Firebase Authentication, Firestore, Storage e Cloud Functions continuam sendo serviços separados; publique as regras e funções no Firebase para ativar cadastro, anúncios e envio de propostas.
+O `vite.config.js` mantém o caminho `/soeletricos/` no GitHub Pages.
