@@ -49,3 +49,17 @@ firebase deploy --only functions,firestore:rules,storage
 ```
 
 Na primeira publicação, o Firebase solicitará os parâmetros `SMTP_HOST`, `SMTP_PORT` e `MAIL_FROM`. Informe os dados do seu provedor de e-mail. Não coloque senhas SMTP no frontend.
+
+
+## Publicar no GitHub Pages
+
+O projeto inclui o workflow `.github/workflows/deploy.yml`. Para usá-lo:
+1. Envie todos os arquivos e pastas do projeto para a raiz do repositório GitHub.
+2. O repositório deve se chamar `soeletricos` para que o caminho configurado no Vite funcione sem alteração. Se tiver outro nome, altere `base` em `vite.config.js` para `'/NOME-DO-REPOSITORIO/'`.
+3. No GitHub, abra **Settings → Pages** e escolha **GitHub Actions** em Build and deployment.
+4. Faça um push na branch `main` ou execute o workflow em **Actions**.
+5. Aguarde o workflow terminar e abra a URL indicada em **Settings → Pages**.
+
+Se o repositório for `usuario.github.io` (repositório de usuário) ou usar domínio próprio, ajuste `base` para `'/'`.
+
+Observação: GitHub Pages hospeda apenas os arquivos do site. Firebase Authentication, Firestore, Storage e Cloud Functions continuam sendo serviços separados; publique as regras e funções no Firebase para ativar cadastro, anúncios e envio de propostas.
