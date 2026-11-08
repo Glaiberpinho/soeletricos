@@ -1,9 +1,11 @@
-import { initializeApp } from 'firebase/app'
+import { initializeApp, getApps } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 
-const Config = {
+// Configuração pública do aplicativo Web Firebase, injetada pelo GitHub Actions
+// durante o build por meio das variáveis VITE_FIREBASE_*.
+const firebaseConfig = {
   apiKey: "AIzaSy...",
   authDomain: "seu-projeto.firebaseapp.com",
   projectId: "seu-projeto",
@@ -12,8 +14,29 @@ const Config = {
   appId: "1:123456:web:abcd"
 };
 
-export const firebaseReady = Object.values(config).every(Boolean)
-export const app = firebaseReady ? initializeApp(config) : null
-export const auth = app ? getAuth(app) : null
-export const db = app ? getFirestore(app) : null
-export const storage = app ? getStorage(app) : null
+export const firebaseReady = Boolean(
+  firebaseConfig.apiKey &&
+  firebaseConfig.authDomain &&
+  firebaseConfig.projectId &&
+  firebaseConfig.storageBucket &&
+  firebaseConfig.messagingSenderId &&
+  firebaseConfig.appId
+)
+
+let firebaseApp = null
+let firebaseInitError = null
+
+if (firebaseReady) {
+  try {
+    firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
+  } catch (error) {
+    firebaseInitError = error
+    console.error('Falha ao inicializar Firebase:', error)
+  }
+}
+
+export const app = firebaseApp
+export const auth = firebaseApp ? getAuth(firebaseApp) : null
+export const db = firebaseApp ? getFirestore(firebaseApp) : null
+export const storage = firebaseApp ? getStorage(firebaseApp) : null
+export const firebaseError = firebaseInitError
