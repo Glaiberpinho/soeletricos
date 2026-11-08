@@ -201,13 +201,10 @@ function App() {
     setNotice('Proposta registrada apenas neste navegador. Nenhum e-mail foi enviado ao anunciante.')
   }
 
-  async function removeListing(item) {
+    async function removeListing(item) {
     if (item.demo || item.ownerUid !== firebaseUser?.uid) return
     if (!confirm('Excluir este anúncio?')) return
     try {
-      for (const path of (item.storagePaths || [])) {
-        try { await deleteObject(ref(storage, path)) } catch (error) { console.warn('Foto não removida:', error) }
-      }
       await deleteDoc(doc(db, 'listings', item.id))
       await loadListings()
       setSelected(null); setNotice('Anúncio excluído do Firebase.')
