@@ -32,13 +32,13 @@ function imageToDataUrl(file) {
       const img = new Image()
       img.onerror = reject
       img.onload = () => {
-        const max = 800 // Reduzido ligeiramente para otimizar o armazenamento gratuito no Firestore
+        const max = 800 
         const scale = Math.min(1, max / Math.max(img.width, img.height))
         const canvas = document.createElement('canvas')
         canvas.width = Math.round(img.width * scale)
         canvas.height = Math.round(img.height * scale)
         canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/jpeg', 0.65)) // Otimização de qualidade para plano Spark
+        resolve(canvas.toDataURL('image/jpeg', 0.65)) 
       }
       img.src = reader.result
     }
@@ -80,7 +80,7 @@ function App() {
 
   useEffect(() => {
     if (!firebaseReady) {
-      setNotice('Firebase não configurado. Configure as variáveis VITE_FIREBASE_* para carregar e publicar anúncios na nuvem.')
+      setNotice('Firebase não configurado. Configure as variáveis de ambiente para carregar anúncios na nuvem.')
       return
     }
     const unsubscribe = onAuthStateChanged(auth, current => {
@@ -126,7 +126,7 @@ function App() {
       const normalizedEmail = email.trim().toLowerCase()
       if (users.some(item => item.email === normalizedEmail)) return setNotice('Este e-mail já está cadastrado neste navegador. Faça login.')
       const account = { id: `user_${Date.now()}`, email: normalizedEmail, passwordHash: await passwordHash(password) }
-      if (!writeStore(KEYS.users, [...users, account])) return setNotice('Não foi possível salvar a conta. O armazenamento do navegador pode estar cheio.')
+      if (!writeStore(KEYS.users, [...users, account])) return setNotice('Não foi possível salvar a conta.')
       const session = { uid: account.id, email: account.email }
       writeStore(KEYS.session, session); setUser(session); setModal(''); setEmail(''); setPassword('')
       setNotice('Conta criada neste navegador. Você já pode publicar anúncios!')
@@ -141,7 +141,7 @@ function App() {
       const users = readStore(KEYS.users, [])
       const normalizedEmail = email.trim().toLowerCase()
       const account = users.find(item => item.email === normalizedEmail)
-      if (!account || account.passwordHash !== await passwordHash(password)) return setNotice('E-mail ou senha incorretos. A conta precisa ter sido criada neste navegador.')
+      if (!account || account.passwordHash !== await passwordHash(password)) return setNotice('E-mail ou senha incorretos.')
       const session = { uid: account.id, email: account.email }
       writeStore(KEYS.session, session); setUser(session); setModal(''); setEmail(''); setPassword('')
       setNotice('Login realizado com sucesso!')
@@ -156,7 +156,7 @@ function App() {
 
   async function publish() {
     if (!user) return setNotice('Entre ou crie uma conta para publicar anúncios.')
-    if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
+    if (!firebaseReady) return setNotice('Firebase não configurado.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     if (photos.length > 6) return setNotice('Você pode enviar no máximo 6 fotos.')
     setBusy(true)
@@ -165,33 +165,32 @@ function App() {
       if (!firebaseUser) firebaseUser = (await signInAnonymously(auth)).user
       
       const photoUrls = []
-      // Convertemos as imagens em texto de forma gratuita em vez de usar o Storage pago
       for (const file of photos) {
         const base64Url = await imageToDataUrl(file)
         photoUrls.push(base64Url)
       }
       
       await addDoc(collection(db, 'listings'), {
-        title: title.trim(), description: description.trim(), photoUrls, storagePaths: [],
+        title: title.trim(), description: description.trim(), photoUrls,
         ownerUid: firebaseUser.uid, ownerEmail: user.email, createdAt: serverTimestamp()
       })
       setTitle(''); setDescription(''); setPhotos([]); setModal(''); setPage(1)
       await loadListings()
-      setNotice('Anúncio publicado com sucesso no Firebase de forma 100% gratuita!')
+      setNotice('Anúncio publicado com sucesso de forma 100% gratuita!')
     } catch (error) {
       console.error(error)
-      setNotice(`Erro ao publicar no Firebase: ${error?.message || 'verifique as configurações e regras.'}`)
+      setNotice(`Erro ao publicar: ${error?.message || 'verifique as regras.'}`)
     } finally { setBusy(false) }
   }
 
   function sendProposal() {
     if (!proposal.trim() || !proposalEmail.trim()) return setNotice('Informe seu e-mail e escreva uma mensagem.')
-    if (selected?.demo) return setNotice('Este é um anúncio de demonstração. A proposta não foi enviada.')
+    if (selected?.demo) return setNotice('Este é um anúncio de demonstração.')
     const proposals = readStore(KEYS.proposals, [])
     const record = { id: `proposal_${Date.now()}`, listingId: selected.id, senderEmail: proposalEmail.trim(), message: proposal.trim(), createdAt: new Date().toISOString() }
-    if (!writeStore(KEYS.proposals, [record, ...proposals])) return setNotice('Não foi possível registrar a proposta no armazenamento do navegador.')
+    writeStore(KEYS.proposals, [record, ...proposals])
     setProposal(''); setProposalEmail('')
-    setNotice('Proposta registrada apenas neste navegador. Nenhum e-mail foi enviado ao anunciante.')
+    setNotice('Proposta registrada com sucesso neste navegador.')
   }
 
   async function removeListing(item) {
@@ -201,10 +200,21 @@ function App() {
       await deleteDoc(doc(db, 'listings', item.id))
       await loadListings()
       setSelected(null); setNotice('Anúncio excluído do Firebase.')
-    } catch (error) { setNotice(`Não foi possível excluir: ${error?.message || 'erro no Firebase'}`) }
+    } catch (error) { setNotice(`Não foi possível excluir: ${error?.message}`) }
   }
 
-  return <div className="site-shell">
-    <header className="header">
-      <a className="brand" href="#" onClick={() => { setSelected(null); setModal('') }}>
-        <span className="brand-mark"><CarFront size={25}/><Zap size={12}/></span>
+  return (
+    <div className="site-shell">
+      <header className="header">
+        <a className="brand" href="#" onClick={() => { setSelected(null); setModal('') }}>
+          <span className="brand-mark"><CarFront size={25}/><Zap size={12}/></span>
+          <span>SÓ<span className="brand-green">ELÉTRICOS</span><small>CLASSIFICADOS</small></span>
+        </a>
+        <nav>
+          <button className="nav-link" onClick={() => { setSelected(null); setModal('') }}>Comprar</button>
+          {user ? <button className="nav-link" onClick={() => setModal('publish')}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+          {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
+        </nav>
+      </header>
+
+      <main>
