@@ -4,7 +4,7 @@ import { getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 import { getFunctions } from 'firebase/functions'
 
-const firebaseConfig = {
+const Config = {
   apiKey: "AIzaSy...",
   authDomain: "seu-projeto.firebaseapp.com",
   projectId: "seu-projeto",
