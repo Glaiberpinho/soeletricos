@@ -11,7 +11,7 @@ const firebaseConfig = {
   messagingSenderId: "706881545139",
   appId: "1:706881545139:web:def368ea3e3548676fa1c6",
   measurementId: "G-0WDL03408J"
-};
+}
 
 export const firebaseReady = Boolean(
   firebaseConfig.apiKey &&
@@ -37,6 +37,11 @@ export const app = firebaseApp
 export const auth = firebaseApp ? getAuth(firebaseApp) : null
 export const db = firebaseApp ? getFirestore(firebaseApp) : null
 
-// STORAGE DESATIVADO PARA GARANTIR PLANO 100% GRATUITO (SPARK)
-export const storage = null 
+// --- TRUQUE PARA O PLANO 100% GRATUITO (SPARK) ---
+// Criamos um Storage falso para enganar o formulário e evitar o erro '_location'
+export const storage = {
+  _delegate: {},
+  _location: { bucket: firebaseConfig.storageBucket }
+}
+
 export const firebaseError = firebaseInitError
