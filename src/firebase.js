@@ -3,16 +3,16 @@ import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 
-// Configuração pública do aplicativo Web Firebase, injetada pelo GitHub Actions
-// durante o build por meio das variáveis VITE_FIREBASE_*.
+// Configuração do aplicativo Web Firebase — projeto Só Elétricos.
 const firebaseConfig = {
-  apiKey: "AIzaSy...",
-  authDomain: "seu-projeto.firebaseapp.com",
-  projectId: "seu-projeto",
-  storageBucket: "seu-projeto.firebasestorage.app",
-  messagingSenderId: "123456789",
-  appId: "1:123456:web:abcd"
-};
+  apiKey: "AIzaSyBktJKVM6N7QOrU0SgwgtqFKbtqqthTq-M",
+  authDomain: "soeletricos-app-ee1e6.firebaseapp.com",
+  projectId: "soeletricos-app-ee1e6",
+  storageBucket: "soeletricos-app-ee1e6.firebasestorage.app",
+  messagingSenderId: "706881545139",
+  appId: "1:706881545139:web:def368ea3e3548676fa1c6",
+  measurementId: "G-0WDL03408J"
+}
 
 export const firebaseReady = Boolean(
   firebaseConfig.apiKey &&
