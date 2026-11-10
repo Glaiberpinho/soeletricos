@@ -5,7 +5,7 @@ import { getFirestore } from 'firebase/firestore'
 // Configuração do aplicativo Web Firebase — projeto Só Elétricos.
 const firebaseConfig = {
   apiKey: "AIzaSyBktJKVM6N7QOrU0SgwgtqFKbtqqthTq-M",
-  authDomain: "://firebaseapp.com",
+  authDomain: "soeletricos-app-ee1e6.firebaseapp.com",
   projectId: "soeletricos-app-ee1e6",
   storageBucket: "soeletricos-app-ee1e6.firebasestorage.app",
   messagingSenderId: "706881545139",
