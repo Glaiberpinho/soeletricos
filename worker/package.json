@@ -1,1 +1,10 @@
-
+{
+  "name": "soeletricos-mail-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "firebase-admin": "^13.5.0",
+    "nodemailer": "^7.0.5"
+  }
+}
