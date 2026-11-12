@@ -37,11 +37,4 @@ export const app = firebaseApp
 export const auth = firebaseApp ? getAuth(firebaseApp) : null
 export const db = firebaseApp ? getFirestore(firebaseApp) : null
 
-// --- TRUQUE PARA O PLANO 100% GRATUITO (SPARK) ---
-// Criamos um Storage falso para enganar o formulário e evitar o erro '_location'
-export const storage = {
-  _delegate: {},
-  _location: { bucket: firebaseConfig.storageBucket }
-}
-
 export const firebaseError = firebaseInitError
