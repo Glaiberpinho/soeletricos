@@ -1,19 +1,50 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function validPhotos(photos) {
+      return photos is list
+        && photos.size() <= 4
+        && (photos.size() < 1 || (photos[0] is string && photos[0].size() <= 174080))
+        && (photos.size() < 2 || (photos[1] is string && photos[1].size() <= 174080))
+        && (photos.size() < 3 || (photos[2] is string && photos[2].size() <= 174080))
+        && (photos.size() < 4 || (photos[3] is string && photos[3].size() <= 174080));
+    }
+
     match /listings/{listingId} {
       allow read: if true;
       allow create: if request.auth != null
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.keys().hasOnly(['title', 'description', 'photoUrls', 'storagePaths', 'ownerUid', 'ownerEmail', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['title', 'description', 'city', 'state', 'photoUrls', 'ownerUid', 'createdAt'])
         && request.resource.data.title is string
+        && request.resource.data.title.size() <= 150
         && request.resource.data.description is string
-        && request.resource.data.photoUrls is list
-        && request.resource.data.photoUrls.size() <= 6
-        && request.resource.data.storagePaths is list
-        && request.resource.data.storagePaths.size() <= 6;
+        && request.resource.data.description.size() <= 5000
+        && request.resource.data.city is string
+        && request.resource.data.city.size() > 0
+        && request.resource.data.state is string
+        && request.resource.data.state.size() == 2
+        && validPhotos(request.resource.data.photoUrls);
       allow update, delete: if request.auth != null
         && resource.data.ownerUid == request.auth.uid;
+
+      match /private/contact {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/listings/$(listingId)).data.ownerUid == request.auth.uid;
+      }
+    }
+
+    match /proposals/{proposalId} {
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['listingId', 'senderEmail', 'message', 'status', 'createdAt'])
+        && request.resource.data.listingId is string
+        && exists(/databases/$(database)/documents/listings/$(request.resource.data.listingId))
+        && request.resource.data.senderEmail is string
+        && request.resource.data.senderEmail.size() <= 254
+        && request.resource.data.message is string
+        && request.resource.data.message.size() >= 5
+        && request.resource.data.message.size() <= 5000
+        && request.resource.data.status == 'pending';
+      allow read, update, delete: if false;
     }
   }
 }

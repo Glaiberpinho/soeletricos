@@ -1,31 +1,46 @@
-# Só Elétricos — Firebase para anúncios, sem e-mails
+# Só Elétricos
 
-O projeto mantém **Firebase Firestore para os dados dos anúncios** e **Firebase Storage para as fotos**. A confirmação por e-mail e o envio de propostas por e-mail foram removidos.
+Site de classificados de veículos elétricos, publicado no GitHub Pages e com anúncios no Firebase Firestore.
 
-## Como funciona
-- Cadastro e login demonstrativos ficam no LocalStorage deste navegador (não são contas Firebase).
-- Ao abrir o site, o Firebase cria uma sessão anônima para autorizar gravação segura de anúncios e fotos.
-- Dados dos anúncios e URLs das fotos são gravados no Firestore; arquivos de imagem ficam no Storage.
-- Os anúncios publicados ficam disponíveis para todos os visitantes, em qualquer dispositivo.
-- Propostas ficam registradas somente no LocalStorage do navegador que as enviou. Nenhum e-mail é enviado.
-- Os anúncios de exemplo continuam na vitrine.
+## Recursos desta versão
 
-## Configuração obrigatória do Firebase
-1. No Firebase Console, habilite **Authentication → Sign-in method → Anonymous**.
-2. Ative/crie o Firestore Database e o Storage.
-3. Publique as regras dos arquivos `firestore.rules` e `storage.rules` no console Firebase.
-4. Copie as seis configurações do app Web Firebase.
-5. No GitHub, abra **Settings → Secrets and variables → Actions → New repository secret** e crie estes seis secrets: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`.
-6. Faça um novo commit para disparar o GitHub Actions e compilar o site com essas configurações.
+- Até 4 fotos por anúncio, comprimidas no navegador e gravadas como Base64 no próprio documento do Firestore.
+- Limite de segurança de 700 KB para o conjunto das imagens por anúncio (abaixo do limite de 1 MiB por documento).
+- Estado e município obrigatórios, carregados pela API pública do IBGE.
+- Pesquisa por texto, cidade e UF.
+- Mensagens para anunciantes gravadas em uma fila Firestore e enviadas pelo Gmail usando GitHub Actions, sem Cloud Functions.
+- Não utiliza Firebase Storage nem Cloud Functions.
 
-## Importante
-O login de demonstração é local ao navegador. Ele não protege identidade real nem sincroniza contas. A autenticação anônima do Firebase é usada apenas para controlar quem pode gravar/excluir anúncios e imagens. Como a autenticação anônima pode ser perdida ao limpar os dados do navegador, a propriedade de anúncios publicados pode deixar de estar acessível nessa situação. Propostas não são entregues ao anunciante, pois o envio de e-mail está desativado.
+## Configuração do Firebase (plano Spark)
 
-## Executar
-```bash
-npm install
-npm run dev
-npm run build
-```
+1. Abra o projeto `soeletricos-app-ee1e6` no Firebase Console.
+2. Em Authentication > Sign-in method, habilite **Anonymous**. O site usa essa sessão técnica para autorizar a publicação de anúncios e mensagens.
+3. Em Firestore Database > Rules, publique o conteúdo de `firestore.rules`.
+4. Não é necessário habilitar Firebase Storage nem implantar Cloud Functions.
 
-O `vite.config.js` mantém o caminho `/soeletricos/` no GitHub Pages.
+## Secrets necessários no GitHub
+
+No repositório, abra Settings > Secrets and variables > Actions > New repository secret. Cadastre:
+
+- `FIREBASE_SERVICE_ACCOUNT`: conteúdo completo do JSON da conta de serviço do Firebase (uma única linha ou JSON formatado).
+- `GMAIL_USER`: endereço completo da conta Gmail que enviará as mensagens.
+- `GMAIL_APP_PASSWORD`: senha de app do Google, sem espaços. Não use a senha normal da conta.
+
+O projeto anterior já utilizava os nomes `GMAIL_USER`, `GMAIL_APP_PASSWORD` e `FIREBASE_SERVICE_ACCOUNT`; se já estiverem cadastrados e válidos, não precisa cadastrá-los novamente.
+
+## Publicação
+
+1. Extraia o ZIP.
+2. Envie o conteúdo da pasta `soeletricos-main` para a raiz do repositório GitHub (branch `main`), substituindo os arquivos antigos.
+3. Em Actions, confira a execução de **Deploy Só Elétricos no GitHub Pages**.
+4. Para testar o envio de e-mail sem esperar o agendamento, abra **Enviar mensagens dos anúncios pelo Gmail** e clique em **Run workflow**.
+
+O workflow automático consulta a fila a cada 30 minutos para ajudar a manter o uso de GitHub Actions dentro da cota gratuita de repositórios privados. O GitHub pode atrasar execuções agendadas, portanto o e-mail não é necessariamente instantâneo. Você pode usar Run workflow para processar mensagens imediatamente.
+
+## Limitações importantes
+
+- Firestore limita cada documento a 1 MiB. O site comprime cada foto e bloqueia a publicação quando o total das imagens passa de 700 KB; anúncios com descrição muito extensa também podem atingir o limite.
+- O plano Spark tem cotas diárias de leitura, gravação e armazenamento. O uso acima das cotas pode deixar as operações indisponíveis até a renovação das cotas.
+- A criação de conta e o login atuais continuam armazenados localmente no navegador. Isso não é autenticação real compartilhada entre dispositivos; a sessão anônima do Firebase é usada apenas para as regras de segurança.
+- A API do IBGE precisa estar acessível no navegador para carregar estados e municípios.
+- Mensagens ficam na fila do Firestore e só são processadas quando o workflow do GitHub Actions executar.
