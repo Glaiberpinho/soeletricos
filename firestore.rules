@@ -14,11 +14,13 @@ service cloud.firestore {
       allow read: if true;
       allow create: if request.auth != null
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.keys().hasOnly(['title', 'description', 'city', 'state', 'photoUrls', 'ownerUid', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['title', 'description', 'price', 'city', 'state', 'photoUrls', 'ownerUid', 'createdAt'])
         && request.resource.data.title is string
         && request.resource.data.title.size() <= 150
         && request.resource.data.description is string
         && request.resource.data.description.size() <= 5000
+        && request.resource.data.price is number
+        && request.resource.data.price > 0
         && request.resource.data.city is string
         && request.resource.data.city.size() > 0
         && request.resource.data.state is string
