@@ -165,7 +165,7 @@ function App() {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 6000)
     // Provedor externo recebe o IP da conexão; não acessamos GPS.
-    fetch('https://ipapi.co/json/', { signal: controller.signal })
+    fetch('https://ipwho.is/', { signal: controller.signal })
       .then(r => { if (!r.ok) throw new Error('Localização indisponível'); return r.json() })
       .then(data => {
         if (data.country_code !== 'BR' || !data.city || !data.region_code || data.error) return
