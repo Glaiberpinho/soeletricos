@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Search, CarFront, Plus, UserRound, LogOut, ChevronLeft, ChevronRight,
-  X, Mail, Upload, Zap, MapPin, Trash2, ArrowLeft
+  X, Mail, Upload, Zap, MapPin, Trash2, ArrowLeft, Pencil, ImagePlus
 } from 'lucide-react'
 import { demoListings } from './demo'
 import { auth, db, firebaseReady } from './firebase'
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth'
-import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc } from 'firebase/firestore'
+import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
 const KEYS = { users: 'soeletricos_users_v1', session: 'soeletricos_session_v1', listings: 'soeletricos_listings_v1', proposals: 'soeletricos_proposals_v1' }
@@ -69,6 +69,13 @@ function compressImage(file) {
   })
 }
 
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) && amount > 0
+    ? amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })
+    : 'Consulte o valor'
+}
+
 function AdCard({ item, onOpen }) {
   return <button className="ad-card" onClick={() => onOpen(item)}>
     <div className="ad-photo">
@@ -77,7 +84,7 @@ function AdCard({ item, onOpen }) {
     </div>
     <div className="ad-info">
       <h3>{item.title}</h3>
-      <strong>Confira a descrição</strong>
+      <strong>{item.price ? formatCurrency(item.price) : 'Consulte o valor'}</strong>
       <small><MapPin size={13}/> {item.city ? `${item.city}${item.state ? ` - ${item.state}` : ''}` : 'Contato direto com o anunciante'}</small>
     </div>
   </button>
@@ -97,6 +104,9 @@ function App() {
   const [password, setPassword] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [price, setPrice] = useState('')
+  const [editingListing, setEditingListing] = useState(null)
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0)
   const [photos, setPhotos] = useState([])
   const [photoPreviews, setPhotoPreviews] = useState([])
   const [uf, setUf] = useState('')
@@ -136,7 +146,10 @@ function App() {
     setCity('')
     fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios?orderBy=nome`)
       .then(response => { if (!response.ok) throw new Error('Falha ao carregar municípios'); return response.json() })
-      .then(data => setCitiesList(data))
+      .then(data => {
+        setCitiesList(data)
+        if (editingListing?.state === uf && editingListing?.city) setCity(editingListing.city)
+      })
       .catch(error => { console.error(error); setCitiesList([]); setNotice('Não foi possível carregar os municípios. Tente selecionar o estado novamente.') })
       .finally(() => setCitiesLoading(false))
   }, [uf])
@@ -205,6 +218,8 @@ function App() {
     if (!user) return setNotice('Entre ou crie uma conta para publicar anúncios.')
     if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
+    const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
+    if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) return setNotice('Informe um valor válido para o veículo.')
     if (!uf || !city) return setNotice('Selecione o estado e a cidade do veículo.')
     if (photos.length > 4) return setNotice('Você pode enviar no máximo 4 fotos.')
     if (description.trim().length > 5000) return setNotice('A descrição deve ter no máximo 5.000 caracteres.')
@@ -213,13 +228,14 @@ function App() {
       let currentFirebaseUser = auth.currentUser
       if (!currentFirebaseUser) currentFirebaseUser = (await signInAnonymously(auth)).user
       const photoUrls = []
-      for (const file of photos) photoUrls.push(await compressImage(file))
+      for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
       const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
       if (totalPhotoBytes > 700 * 1024) throw new Error('As fotos ultrapassaram o limite seguro de 700 KB. Remova uma foto ou escolha imagens menores.')
 
       const listingRef = await addDoc(collection(db, 'listings'), {
         title: title.trim(),
         description: description.trim(),
+        price: numericPrice,
         city,
         state: uf,
         photoUrls,
@@ -230,13 +246,85 @@ function App() {
       await setDoc(doc(db, 'listings', listingRef.id, 'private', 'contact'), {
         ownerEmail: user.email.trim().toLowerCase()
       })
-      setTitle(''); setDescription(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal(''); setPage(1)
+      setTitle(''); setDescription(''); setPrice(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal(''); setPage(1)
       await loadListings()
       setNotice('Anúncio publicado! As fotos foram comprimidas e salvas no Firestore.')
     } catch (error) {
       console.error(error)
       setNotice(`Erro ao publicar: ${error?.message || 'verifique as configurações e regras do Firestore.'}`)
     } finally { setBusy(false) }
+  }
+
+
+  function openEditListing(item) {
+    if (item.demo || item.ownerUid !== firebaseUser?.uid) return
+    setEditingListing(item)
+    setTitle(item.title || '')
+    setDescription(item.description || '')
+    setPrice(item.price != null ? String(item.price).replace('.', ',') : '')
+    setUf(item.state || '')
+    setCity(item.city || '')
+    const existingPhotos = Array.isArray(item.photoUrls) ? item.photoUrls.slice(0, 4) : []
+    setPhotos(existingPhotos)
+    setPhotoPreviews(existingPhotos)
+    setSelected(null)
+    setModal('edit')
+  }
+
+  async function saveListingChanges() {
+    if (!editingListing || editingListing.ownerUid !== firebaseUser?.uid) return setNotice('Você não tem permissão para editar este anúncio.')
+    if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
+    if (!uf || !city) return setNotice('Selecione o estado e a cidade do veículo.')
+    const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
+    if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) return setNotice('Informe um valor válido para o veículo.')
+    if (description.trim().length > 5000) return setNotice('A descrição deve ter no máximo 5.000 caracteres.')
+    setBusy(true)
+    try {
+      const photoUrls = []
+      for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
+      const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
+      if (totalPhotoBytes > 700 * 1024) throw new Error('As fotos ultrapassaram o limite seguro de 700 KB. Remova uma foto ou escolha imagens menores.')
+      await updateDoc(doc(db, 'listings', editingListing.id), {
+        title: title.trim(),
+        description: description.trim(),
+        price: numericPrice,
+        city,
+        state: uf,
+        photoUrls
+      })
+      await setDoc(doc(db, 'listings', editingListing.id, 'private', 'contact'), {
+        ownerEmail: user.email.trim().toLowerCase()
+      }, { merge: true })
+      setEditingListing(null)
+      setTitle(''); setDescription(''); setPrice(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity('')
+      setModal('myListings')
+      await loadListings()
+      setNotice('Anúncio atualizado com sucesso!')
+    } catch (error) {
+      console.error(error)
+      setNotice(`Não foi possível atualizar o anúncio: ${error?.message || 'verifique as regras do Firestore.'}`)
+    } finally { setBusy(false) }
+  }
+
+  function addPhotoAt(index, file) {
+    if (!file) return
+    const nextPhotos = [...photos]
+    const nextPreviews = [...photoPreviews]
+    nextPhotos[index] = file
+    setPhotos(nextPhotos)
+    readFilePreview(file).then(preview => {
+      nextPreviews[index] = preview
+      setPhotoPreviews([...nextPreviews])
+    }).catch(() => setNotice(`Não foi possível visualizar a foto ${index + 1}.`))
+  }
+
+  function removePhotoAt(index) {
+    const nextPhotos = [...photos]
+    const nextPreviews = [...photoPreviews]
+    nextPhotos[index] = null
+    nextPreviews[index] = null
+    setPhotos(nextPhotos)
+    setPhotoPreviews(nextPreviews)
   }
 
 
@@ -281,8 +369,8 @@ function App() {
         <span>SÓ<span className="brand-green">ELÉTRICOS</span><small>CLASSIFICADOS DE VEÍCULOS ELÉTRICOS</small></span>
       </a>
       <nav>
-        <button className="nav-link" onClick={() => { setSelected(null); setModal('') }}>Comprar</button>
-        {user ? <button className="nav-link" onClick={() => setModal('publish')}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+        {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings') }}>Meus Anúncios</button>}
+        {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
       </nav>
     </header>
@@ -296,7 +384,7 @@ function App() {
         <section className="results">
           <div className="section-heading"><div><span className="eyebrow dark">VITRINE DE OPORTUNIDADES</span><h2>Carros elétricos à venda</h2></div><span className="result-count">{filtered.length} anúncios</span></div>
           <div className="demo-note">Anúncios e fotos são armazenados no Firebase. Mensagens aos anunciantes são encaminhadas automaticamente por e-mail.</div>
-          {shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={setSelected}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
+          {shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
           {pages > 1 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}><ChevronLeft size={18}/> Anterior</button><span>Página {page} de {pages}</span><button disabled={page === pages} onClick={() => setPage(p => p + 1)}>Próxima <ChevronRight size={18}/></button></div>}
         </section>
         <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
@@ -305,18 +393,20 @@ function App() {
 
     <footer><div className="footer-brand">SÓ<span>ELÉTRICOS</span></div><p>Classificados de veículos elétricos. Negocie diretamente com o anunciante.</p><small>© {new Date().getFullYear()} Só Elétricos. Todos os direitos reservados.</small></footer>
 
-    {selected && <div className="overlay" onClick={() => setSelected(null)}><section className="detail-modal" onClick={e => e.stopPropagation()}>
-      <button className="close" onClick={() => setSelected(null)}><X/></button>
-      <div className="detail-photos">{(selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']).map((src, i) => <img key={i} src={src} alt={`${selected.title} ${i+1}`}/>)}</div>
-      <div className="detail-content"><button className="back-link" onClick={() => setSelected(null)}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
-        {firebaseUser?.uid === selected.ownerUid && <button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button>}
+    {selected && <div className="overlay" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><section className="detail-modal" onClick={e => e.stopPropagation()}>
+      <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><X/></button>
+      <div className="detail-photos">{(() => { const gallery = selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']; const active = Math.min(selectedPhotoIndex, gallery.length - 1); return <><img className="detail-main-photo" src={gallery[active]} alt={`${selected.title} foto principal`} onClick={() => setSelectedPhotoIndex((active + 1) % gallery.length)}/><div className="detail-thumbnails">{gallery.map((src, i) => <button type="button" key={i} className={i === active ? 'active' : ''} onClick={() => setSelectedPhotoIndex(i)} aria-label={`Visualizar foto ${i + 1}`}><img src={src} alt={`${selected.title} miniatura ${i + 1}`}/></button>)}</div></> })()}</div>
+      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
+        {firebaseUser?.uid === selected.ownerUid && <div className="owner-actions"><button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button><button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
         <div className="proposal-box"><h3>Gostou deste veículo?</h3><p>Envie uma mensagem diretamente ao anunciante. Ela será encaminhada por e-mail.</p><input type="email" value={proposalEmail} onChange={e => setProposalEmail(e.target.value)} placeholder="Seu e-mail de contato"/><textarea value={proposal} onChange={e => setProposal(e.target.value)} placeholder="Escreva sua mensagem ou proposta..." rows="4"/><button className="primary full" disabled={busy} onClick={sendProposal}><Mail size={17}/> {busy ? 'Enviando...' : 'Enviar mensagem ao anunciante'}</button></div>
       </div>
     </section></div>}
 
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
+      {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Conta demonstrativa salva somente neste navegador. Não há confirmação por e-mail.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button></>}
-      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (máximo 4)</label><label className="upload-area"><Upload/><span>Escolher fotos do veículo</span><input type="file" accept="image/*" multiple onChange={async e => { const files = Array.from(e.target.files || []); if (files.length > 4) setNotice('Selecione no máximo 4 fotos.'); const chosen = files.slice(0,4); setPhotos(chosen); try { setPhotoPreviews(await Promise.all(chosen.map(readFilePreview))) } catch { setPhotoPreviews([]); setNotice('Não foi possível visualizar uma das fotos.') } e.target.value = '' }}/></label><small className="file-list">{photos.length ? `${photos.length} de 4 fotos selecionadas` : 'Nenhuma foto selecionada'}</small>{photoPreviews.length > 0 && <div className="photo-preview-grid">{photoPreviews.map((src, index) => <div className="photo-preview" key={`${index}-${src.slice(-20)}`}><img src={src} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => { setPhotos(current => current.filter((_, i) => i !== index)); setPhotoPreviews(current => current.filter((_, i) => i !== index)) }} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>)}</div>}<div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
+      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
+      {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={16}/></button></div>}
   </div>
