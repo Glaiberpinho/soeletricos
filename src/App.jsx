@@ -64,6 +64,32 @@ function formatCurrency(value) {
     : 'Consulte o valor'
 }
 
+// Localização aproximada por IP: não solicita GPS ou permissão do navegador.
+// Se o provedor falhar ou retornar uma cidade incerta, mantém os espaços vazios.
+function normalizePlace(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function CampaignSlot({ campaigns, position }) {
+  const options = campaigns.filter(c => c.position === position)
+  const [index, setIndex] = useState(0)
+  useEffect(() => { setIndex(0) }, [campaigns, position])
+  useEffect(() => {
+    if (options.length < 2) return
+    const timer = setInterval(() => setIndex(i => (i + 1) % options.length), 8000)
+    return () => clearInterval(timer)
+  }, [options.length, position])
+  const campaign = options[index % Math.max(1, options.length)]
+  const horizontal = position === 'horizontal'
+  if (!campaign) return horizontal
+    ? <section className="top-ad" aria-label="Espaço publicitário superior"><span className="ad-label">PUBLICIDADE</span><div><strong>SEU ANÚNCIO AQUI</strong><small>Espaço para banner publicitário horizontal</small></div></section>
+    : <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
+  return horizontal
+    ? <section className="top-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><img src={campaign.imageUrl} alt={campaign.name} /></a></section>
+    : <aside className="side-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><img src={campaign.imageUrl} alt={campaign.name}/></a></aside>
+}
+
 function AdCard({ item, onOpen }) {
   return <button className="ad-card" onClick={() => onOpen(item)}>
     <div className="ad-photo">
@@ -84,6 +110,16 @@ function App() {
   const [authLoaded, setAuthLoaded] = useState(false)
   const isAdmin = firebaseUser?.uid === ADMIN_UID
   const [listings, setListings] = useState([])
+  const [visitorPlace, setVisitorPlace] = useState(null)
+  const [campaigns, setCampaigns] = useState([])
+  const [campaignName, setCampaignName] = useState('')
+  const [campaignCity, setCampaignCity] = useState('')
+  const [campaignState, setCampaignState] = useState('')
+  const [campaignPosition, setCampaignPosition] = useState('horizontal')
+  const [campaignImage, setCampaignImage] = useState('')
+  const [campaignUrl, setCampaignUrl] = useState('')
+  const [campaignStart, setCampaignStart] = useState('')
+  const [campaignEnd, setCampaignEnd] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState(null)
@@ -124,6 +160,77 @@ function App() {
     loadListings()
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 6000)
+    // Provedor externo recebe o IP da conexão; não acessamos GPS.
+    fetch('https://ipapi.co/json/', { signal: controller.signal })
+      .then(r => { if (!r.ok) throw new Error('Localização indisponível'); return r.json() })
+      .then(data => {
+        if (data.country_code !== 'BR' || !data.city || !data.region_code || data.error) return
+        setVisitorPlace({ city: data.city, state: data.region_code })
+      })
+      .catch(() => {})
+      .finally(() => clearTimeout(timeout))
+    return () => { clearTimeout(timeout); controller.abort() }
+  }, [])
+
+  useEffect(() => {
+    if (!firebaseReady) return
+    getDocs(collection(db, 'campaigns'))
+      .then(snapshot => setCampaigns(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))))
+      .catch(error => console.warn('Publicidade indisponível:', error))
+  }, [])
+
+  const localCampaigns = useMemo(() => {
+    if (!visitorPlace) return []
+    const now = Date.now()
+    return campaigns.filter(c => c.active === true
+      && normalizePlace(c.city) === normalizePlace(visitorPlace.city)
+      && normalizePlace(c.state) === normalizePlace(visitorPlace.state)
+      && (!c.startDate || new Date(c.startDate + 'T00:00:00').getTime() <= now)
+      && (!c.endDate || new Date(c.endDate + 'T23:59:59').getTime() >= now))
+  }, [campaigns, visitorPlace])
+
+  async function saveCampaign() {
+    if (!isAdmin) return
+    const name = campaignName.trim(), city = campaignCity.trim(), state = campaignState.trim().toUpperCase()
+    let imageUrl, destinationUrl
+    try {
+      imageUrl = new URL(campaignImage.trim())
+      destinationUrl = new URL(campaignUrl.trim())
+      if (imageUrl.protocol !== 'https:' || destinationUrl.protocol !== 'https:') throw Error('HTTPS obrigatório')
+    } catch { return setNotice('Informe links HTTPS válidos para a imagem/GIF e o destino.') }
+    if (!name || !city || !/^[A-Z]{2}$/.test(state)) return setNotice('Informe anunciante, cidade e UF com duas letras.')
+    if (campaignStart && campaignEnd && campaignEnd < campaignStart) return setNotice('A data final não pode ser anterior à inicial.')
+    setBusy(true)
+    try {
+      const data = { name, city, state, position: campaignPosition, imageUrl: imageUrl.href,
+        destinationUrl: destinationUrl.href, startDate: campaignStart, endDate: campaignEnd,
+        active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
+      const ref = await addDoc(collection(db, 'campaigns'), data)
+      setCampaigns(old => [...old, { ...data, id: ref.id }])
+      setCampaignName(''); setCampaignCity(''); setCampaignState(''); setCampaignImage(''); setCampaignUrl('')
+      setCampaignStart(''); setCampaignEnd('')
+      setNotice('Campanha cadastrada no Firebase.')
+    } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Confira as regras de campaigns no Firestore.') }
+    finally { setBusy(false) }
+  }
+
+  async function changeCampaign(c, active) {
+    if (!isAdmin) return
+    try {
+      if (active === null) {
+        if (!confirm('Excluir esta publicidade?')) return
+        await deleteDoc(doc(db, 'campaigns', c.id))
+        setCampaigns(old => old.filter(x => x.id !== c.id))
+      } else {
+        await updateDoc(doc(db, 'campaigns', c.id), { active })
+        setCampaigns(old => old.map(x => x.id === c.id ? { ...x, active } : x))
+      }
+    } catch (error) { console.error(error); setNotice('Não foi possível atualizar a publicidade.') }
+  }
 
   useEffect(() => {
     fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados?orderBy=nome')
@@ -374,6 +481,7 @@ function App() {
       </a>
       <nav>
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings') }}>Administrar anúncios</button>}
+        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('campaigns') }}>Publicidade</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings') }}>Meus Anúncios</button>}
         {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
@@ -382,16 +490,16 @@ function App() {
 
     <main>
       <section className="hero"><div className="hero-copy"><span className="eyebrow"><Zap size={14}/> O futuro é elétrico</span><h1>Seu próximo carro<br/><em>é elétrico.</em></h1><p>Encontre, compare e negocie veículos elétricos diretamente com os anunciantes.</p></div></section>
-      <section className="top-ad" aria-label="Espaço publicitário superior"><span className="ad-label">PUBLICIDADE</span><div><strong>SEU ANÚNCIO AQUI</strong><small>Espaço para banner publicitário horizontal</small></div></section>
+      <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
       <section className="search-panel"><div className="search-input-wrap"><Search size={21}/><input value={search} onChange={e => doSearch(e.target.value)} placeholder="Busque por marca, modelo, preço ou qualquer característica..." /></div><button className="search-button" onClick={() => setPage(1)}>Buscar</button></section>
       <div className="content-layout">
-        <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
+        <CampaignSlot campaigns={localCampaigns} position="left"/>
         <section className="results">
           <div className="section-heading"><div><span className="eyebrow dark">VITRINE DE OPORTUNIDADES</span><h2>Carros elétricos à venda</h2></div><span className="result-count">{filtered.length} anúncios</span></div>
           {shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
           {pages > 1 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}><ChevronLeft size={18}/> Anterior</button><span>Página {page} de {pages}</span><button disabled={page === pages} onClick={() => setPage(p => p + 1)}>Próxima <ChevronRight size={18}/></button></div>}
         </section>
-        <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
+        <CampaignSlot campaigns={localCampaigns} position="right"/>
       </div>
     </main>
 
@@ -407,6 +515,16 @@ function App() {
     </section></div>}
 
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
+      {modal === 'campaigns' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Gerenciar publicidade local</h2><p className="form-help">Cadastre imagens ou GIFs hospedados em um endereço HTTPS público. A cidade é identificada aproximadamente pelo IP do visitante, sem solicitar GPS. A imagem deve estar publicada, por exemplo, na pasta public/banners do GitHub Pages.</p>
+        <label>Anunciante</label><input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Nome da empresa" maxLength={120}/>
+        <div className="two-fields"><div><label>Cidade</label><input value={campaignCity} onChange={e => setCampaignCity(e.target.value)} placeholder="Belo Horizonte"/></div><div><label>UF</label><input value={campaignState} onChange={e => setCampaignState(e.target.value)} placeholder="MG" maxLength={2}/></div></div>
+        <label>Espaço publicitário</label><select value={campaignPosition} onChange={e => setCampaignPosition(e.target.value)}><option value="horizontal">Horizontal superior</option><option value="left">Lateral esquerda</option><option value="right">Lateral direita</option></select>
+        <label>Endereço HTTPS da imagem ou GIF</label><input value={campaignImage} onChange={e => setCampaignImage(e.target.value)} placeholder="https://.../banners/empresa.gif"/>
+        <label>Link HTTPS de destino</label><input value={campaignUrl} onChange={e => setCampaignUrl(e.target.value)} placeholder="https://www.anunciante.com.br"/>
+        <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={campaignStart} onChange={e => setCampaignStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={campaignEnd} onChange={e => setCampaignEnd(e.target.value)}/></div></div>
+        <button className="primary full" disabled={busy} onClick={saveCampaign}>Cadastrar publicidade</button>
+        <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
+      </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button></>}
