@@ -39,3 +39,13 @@
   .my-listing-row>img{width:58px;height:52px}
   .edit-button{padding:7px 8px;font-size:10px}
 }
+
+/* Ajuste pontual: exibir a imagem inteira nas miniaturas */
+.detail-thumbnails button {
+  background: #e9efeb;
+}
+.detail-thumbnails img,
+.photo-preview img,
+.photo-slot .photo-preview img {
+  object-fit: contain;
+}
