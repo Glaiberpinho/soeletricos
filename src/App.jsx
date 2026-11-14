@@ -3,7 +3,6 @@ import {
   Search, CarFront, Plus, UserRound, LogOut, ChevronLeft, ChevronRight,
   X, Mail, Upload, Zap, MapPin, Trash2, ArrowLeft, Pencil, ImagePlus
 } from 'lucide-react'
-import { demoListings } from './demo'
 import { auth, db, firebaseReady } from './firebase'
 import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
@@ -84,7 +83,7 @@ function App() {
   const [firebaseUser, setFirebaseUser] = useState(null)
   const [authLoaded, setAuthLoaded] = useState(false)
   const isAdmin = firebaseUser?.uid === ADMIN_UID
-  const [listings, setListings] = useState(demoListings)
+  const [listings, setListings] = useState([])
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState(null)
@@ -153,10 +152,9 @@ function App() {
       const q = query(collection(db, 'listings'), orderBy('createdAt', 'desc'))
       const snap = await getDocs(q)
       const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      setListings(remote.filter(item => {
-        const time = item.createdAt?.toMillis?.() ?? 0
-        return time >= NEW_LISTINGS_FROM
-      }))
+      // Preserve todos os anúncios na memória para que o proprietário
+      // encontre os seus independentemente do filtro da vitrine.
+      setListings(remote)
     } catch (error) {
       console.error(error)
       setNotice('Não foi possível carregar os anúncios do Firebase. Verifique as regras do Firestore.')
@@ -172,8 +170,14 @@ function App() {
       .replace(/\s+/g, ' ')
       .trim()
     const term = normalize(search)
-    if (!term) return listings
-    return listings.filter(item => normalize([
+    // A data de transição afeta apenas a vitrine pública.
+    // Nunca ocultar anúncios do painel do proprietário ou administrador.
+    const publicListings = listings.filter(item => {
+      const time = item.createdAt?.toMillis?.() ?? 0
+      return time >= NEW_LISTINGS_FROM
+    })
+    if (!term) return publicListings
+    return publicListings.filter(item => normalize([
       item.title, item.description, item.price, item.city, item.state
     ].filter(value => value !== null && value !== undefined).join(' ')).includes(term))
   }, [listings, search])
@@ -384,7 +388,6 @@ function App() {
         <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
         <section className="results">
           <div className="section-heading"><div><span className="eyebrow dark">VITRINE DE OPORTUNIDADES</span><h2>Carros elétricos à venda</h2></div><span className="result-count">{filtered.length} anúncios</span></div>
-          <div className="demo-note">Anúncios e fotos são armazenados no Firebase. Mensagens aos anunciantes são encaminhadas automaticamente por e-mail.</div>
           {shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
           {pages > 1 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}><ChevronLeft size={18}/> Anterior</button><span>Página {page} de {pages}</span><button disabled={page === pages} onClick={() => setPage(p => p + 1)}>Próxima <ChevronRight size={18}/></button></div>}
         </section>
