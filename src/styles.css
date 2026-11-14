@@ -6,3 +6,36 @@
 
 /* Seletores de estado/cidade e prévias de fotos do formulário */
 .form-modal select{width:100%;border:1px solid #dce5de;border-radius:8px;padding:12px;background:#fff;color:#34483b;font:13px 'DM Sans';outline-color:#58a879}.form-modal select:disabled{background:#f3f5f3;color:#9aa69e}.photo-preview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}.photo-preview{height:78px;border-radius:8px;overflow:hidden;position:relative;background:#edf2ee}.photo-preview img{width:100%;height:100%;object-fit:cover}.photo-preview button{position:absolute;right:4px;top:4px;border:0;border-radius:50%;width:23px;height:23px;background:#102b24dd;color:#fff;display:grid;place-items:center;cursor:pointer}.two-fields select{min-width:0}
+
+
+/* Ajustes pontuais: preço, gerenciamento de anúncios e galeria interativa */
+.ad-info strong{font-variant-numeric:tabular-nums}
+.detail-price{margin:8px 0 12px}
+.detail-photos{display:block;min-width:0}
+.detail-photos .detail-main-photo{display:block;width:100%;height:310px;object-fit:cover;border-radius:9px;cursor:pointer}
+.detail-thumbnails{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:9px}
+.detail-thumbnails button{padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;background:transparent;cursor:pointer;height:76px}
+.detail-thumbnails button.active{border-color:#1c7548}
+.detail-thumbnails img{display:block;width:100%;height:100%;object-fit:cover}
+.owner-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+.edit-button{border:1px solid #cbd9cf;background:#f7faf7;color:#315640;padding:8px 12px;border-radius:8px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;font-size:11px;font-weight:700}
+.my-listings{display:flex;flex-direction:column;gap:10px;max-height:58vh;overflow:auto}
+.my-listing-row{display:flex;align-items:center;gap:12px;border:1px solid #e4ebe5;border-radius:10px;padding:9px;min-width:0}
+.my-listing-row>img{width:76px;height:60px;object-fit:cover;border-radius:7px;background:#edf2ee;flex:none}
+.my-listing-info{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.my-listing-info strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#263b2e}
+.my-listing-info small{font-size:10px;color:#7b8b81}
+.empty.compact{padding:25px 10px}
+.photo-slots{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:6px}
+.photo-slot{min-width:0}
+.photo-slot .upload-area{min-height:48px;padding:10px;font-size:11px}
+.photo-slot .photo-preview{height:90px;margin-top:6px}
+.photo-slot .photo-preview img{object-fit:cover}
+@media(max-width:760px){
+  .detail-photos{padding:12px}
+  .detail-photos .detail-main-photo{height:230px}
+  .detail-thumbnails button{height:62px}
+  .my-listing-row{gap:8px}
+  .my-listing-row>img{width:58px;height:52px}
+  .edit-button{padding:7px 8px;font-size:10px}
+}
