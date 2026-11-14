@@ -67,3 +67,17 @@
   object-fit: contain;
   object-position: center;
 }
+
+/* Ajuste pontual: banner de apresentação mais compacto e publicidade horizontal maior */
+@media (min-width: 761px) {
+  .hero { min-height: 112px; padding: 15px 32px; margin-top: 18px; margin-bottom: 18px; }
+  .hero h1 { font-size: 26px; margin: 5px 0; }
+  .hero p { margin-top: 5px; font-size: 12px; }
+  .top-ad { height: 198px; }
+}
+@media (max-width: 760px) {
+  .hero { min-height: 118px; padding: 14px 20px; margin-bottom: 16px; }
+  .hero h1 { font-size: 23px; margin: 5px 0; }
+  .hero p { margin-top: 5px; font-size: 12px; }
+  .top-ad { height: 168px; }
+}
