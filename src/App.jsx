@@ -168,9 +168,18 @@ function App() {
   }
 
   const filtered = useMemo(() => {
-    const term = search.trim().toLocaleLowerCase('pt-BR')
+    // Pesquisa tolerante a acentos e espaços (ex.: 'Sao Paulo' encontra 'São Paulo').
+    const normalize = value => String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase('pt-BR')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const term = normalize(search)
     if (!term) return listings
-    return listings.filter(item => [item.title, item.description, item.price, item.city, item.state].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR').includes(term))
+    return listings.filter(item => normalize([
+      item.title, item.description, item.price, item.city, item.state
+    ].filter(value => value !== null && value !== undefined).join(' ')).includes(term))
   }, [listings, search])
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const shown = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
