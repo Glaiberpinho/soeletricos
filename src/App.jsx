@@ -5,25 +5,14 @@ import {
 } from 'lucide-react'
 import { demoListings } from './demo'
 import { auth, db, firebaseReady } from './firebase'
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth'
+import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
-const KEYS = { users: 'soeletricos_users_v1', session: 'soeletricos_session_v1', listings: 'soeletricos_listings_v1', proposals: 'soeletricos_proposals_v1' }
+const ADMIN_UID = 'y97qT8VFbbRcf2UFXy69tj8hSnH2'
+// Data de transição: anúncios antigos não são apagados, apenas ocultados da vitrine.
+const NEW_LISTINGS_FROM = new Date('2026-11-14T00:00:00-03:00').getTime()
 
-function readStore(key, fallback) {
-  try { const value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback }
-  catch { return fallback }
-}
-function writeStore(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); return true }
-  catch (error) { console.error(error); return false }
-}
-async function passwordHash(value) {
-  const bytes = new TextEncoder().encode(value)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('')
-}
 function readFilePreview(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -91,8 +80,10 @@ function AdCard({ item, onOpen }) {
 }
 
 function App() {
-  const [user, setUser] = useState(() => readStore(KEYS.session, null))
+  const [user, setUser] = useState(null)
   const [firebaseUser, setFirebaseUser] = useState(null)
+  const [authLoaded, setAuthLoaded] = useState(false)
+  const isAdmin = firebaseUser?.uid === ADMIN_UID
   const [listings, setListings] = useState(demoListings)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -124,6 +115,8 @@ function App() {
     }
     const unsubscribe = onAuthStateChanged(auth, current => {
       setFirebaseUser(current)
+      setUser(current && !current.isAnonymous ? { uid: current.uid, email: current.email } : null)
+      setAuthLoaded(true)
       if (!current) signInAnonymously(auth).catch(error => {
         console.error(error)
         setNotice('Não foi possível conectar ao Firebase. Verifique se o login anônimo está ativado.')
@@ -160,7 +153,10 @@ function App() {
       const q = query(collection(db, 'listings'), orderBy('createdAt', 'desc'))
       const snap = await getDocs(q)
       const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      setListings([...remote, ...demoListings])
+      setListings(remote.filter(item => {
+        const time = item.createdAt?.toMillis?.() ?? 0
+        return time >= NEW_LISTINGS_FROM
+      }))
     } catch (error) {
       console.error(error)
       setNotice('Não foi possível carregar os anúncios do Firebase. Verifique as regras do Firestore.')
@@ -191,40 +187,35 @@ function App() {
     if (password.length < 6) return setNotice('A senha precisa ter pelo menos 6 caracteres.')
     setBusy(true)
     try {
-      const users = readStore(KEYS.users, [])
-      const normalizedEmail = email.trim().toLowerCase()
-      if (users.some(item => item.email === normalizedEmail)) return setNotice('Este e-mail já está cadastrado neste navegador. Faça login.')
-      const account = { id: `user_${Date.now()}`, email: normalizedEmail, passwordHash: await passwordHash(password) }
-      if (!writeStore(KEYS.users, [...users, account])) return setNotice('Não foi possível salvar a conta. O armazenamento do navegador pode estar cheio.')
-      const session = { uid: account.id, email: account.email }
-      writeStore(KEYS.session, session); setUser(session); setModal(''); setEmail(''); setPassword('')
-      setNotice('Conta criada neste navegador. Você já pode publicar anúncios!')
-    } catch { setNotice('Não foi possível criar a conta neste navegador.') }
-    finally { setBusy(false) }
+      await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
+      setModal(''); setEmail(''); setPassword('')
+      setNotice('Conta criada no Firebase! Seus anúncios estarão disponíveis em qualquer navegador.')
+    } catch (error) {
+      console.error(error)
+      setNotice(error.code === 'auth/email-already-in-use' ? 'Este e-mail já está cadastrado. Faça login.' : `Não foi possível criar a conta: ${error.message}`)
+    } finally { setBusy(false) }
   }
 
   async function login() {
     if (!email.trim() || !password) return setNotice('Informe seu e-mail e sua senha.')
     setBusy(true)
     try {
-      const users = readStore(KEYS.users, [])
-      const normalizedEmail = email.trim().toLowerCase()
-      const account = users.find(item => item.email === normalizedEmail)
-      if (!account || account.passwordHash !== await passwordHash(password)) return setNotice('E-mail ou senha incorretos. A conta precisa ter sido criada neste navegador.')
-      const session = { uid: account.id, email: account.email }
-      writeStore(KEYS.session, session); setUser(session); setModal(''); setEmail(''); setPassword('')
-      setNotice('Login realizado com sucesso!')
-    } catch { setNotice('Não foi possível entrar nesta conta.') }
-    finally { setBusy(false) }
+      await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
+      setModal(''); setEmail(''); setPassword('')
+      setNotice('Login realizado! Seus anúncios estão vinculados à sua conta Firebase.')
+    } catch (error) {
+      console.error(error)
+      setNotice('Não foi possível entrar. Confira o e-mail e a senha da conta Firebase.')
+    } finally { setBusy(false) }
   }
 
-  function logout() {
-    localStorage.removeItem(KEYS.session)
-    setUser(null); setNotice('Você saiu da sua conta neste navegador.')
+  async function logout() {
+    try { await signOut(auth); setNotice('Você saiu da sua conta.') }
+    catch (error) { setNotice(`Não foi possível sair: ${error.message}`) }
   }
 
   async function publish() {
-    if (!user) return setNotice('Entre ou crie uma conta para publicar anúncios.')
+    if (!user || !firebaseUser || firebaseUser.isAnonymous) return setNotice('Entre ou crie uma conta com e-mail e senha para publicar anúncios.')
     if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
@@ -234,8 +225,8 @@ function App() {
     if (description.trim().length > 5000) return setNotice('A descrição deve ter no máximo 5.000 caracteres.')
     setBusy(true)
     try {
-      let currentFirebaseUser = auth.currentUser
-      if (!currentFirebaseUser) currentFirebaseUser = (await signInAnonymously(auth)).user
+      const currentFirebaseUser = auth.currentUser
+      if (!currentFirebaseUser || currentFirebaseUser.isAnonymous || currentFirebaseUser.uid !== user.uid) throw new Error('Entre com e-mail e senha para publicar.')
       const photoUrls = []
       for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
       const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
@@ -361,7 +352,7 @@ function App() {
   }
 
     async function removeListing(item) {
-    if (item.demo || item.ownerUid !== firebaseUser?.uid) return
+    if (item.demo || (item.ownerUid !== firebaseUser?.uid && !isAdmin)) return
     if (!confirm('Excluir este anúncio?')) return
     try {
       await deleteDoc(doc(db, 'listings', item.id, 'private', 'contact')).catch(() => {})
@@ -378,6 +369,7 @@ function App() {
         <span>SÓ<span className="brand-green">ELÉTRICOS</span><small>CLASSIFICADOS DE VEÍCULOS ELÉTRICOS</small></span>
       </a>
       <nav>
+        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings') }}>Administrar anúncios</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings') }}>Meus Anúncios</button>}
         {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
@@ -406,14 +398,15 @@ function App() {
       <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><X/></button>
       <div className="detail-photos">{(() => { const gallery = selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']; const active = Math.min(selectedPhotoIndex, gallery.length - 1); return <><img className="detail-main-photo" src={gallery[active]} alt={`${selected.title} foto principal`} onClick={() => setSelectedPhotoIndex((active + 1) % gallery.length)}/><div className="detail-thumbnails">{gallery.map((src, i) => <button type="button" key={i} className={i === active ? 'active' : ''} onClick={() => setSelectedPhotoIndex(i)} aria-label={`Visualizar foto ${i + 1}`}><img src={src} alt={`${selected.title} miniatura ${i + 1}`}/></button>)}</div></> })()}</div>
       <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
-        {firebaseUser?.uid === selected.ownerUid && <div className="owner-actions"><button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button><button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
+        {(firebaseUser?.uid === selected.ownerUid || isAdmin) && <div className="owner-actions">{firebaseUser?.uid === selected.ownerUid && <button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button>}<button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
         <div className="proposal-box"><h3>Gostou deste veículo?</h3><p>Envie uma mensagem diretamente ao anunciante. Ela será encaminhada por e-mail.</p><input type="email" value={proposalEmail} onChange={e => setProposalEmail(e.target.value)} placeholder="Seu e-mail de contato"/><textarea value={proposal} onChange={e => setProposal(e.target.value)} placeholder="Escreva sua mensagem ou proposta..." rows="4"/><button className="primary full" disabled={busy} onClick={sendProposal}><Mail size={17}/> {busy ? 'Enviando...' : 'Enviar mensagem ao anunciante'}</button></div>
       </div>
     </section></div>}
 
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
+      {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
-      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Conta demonstrativa salva somente neste navegador. Não há confirmação por e-mail.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button></>}
+      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button></>}
       {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
       {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
