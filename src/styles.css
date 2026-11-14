@@ -68,16 +68,20 @@
   object-position: center;
 }
 
-/* Ajuste pontual: banner de apresentação mais compacto e publicidade horizontal maior */
+/* Ajuste exclusivo do banner verde "Seu próximo carro é elétrico".
+   A publicidade horizontal mantém as dimensões originais. */
 @media (min-width: 761px) {
-  .hero { min-height: 112px; padding: 15px 32px; margin-top: 18px; margin-bottom: 18px; }
-  .hero h1 { font-size: 26px; margin: 5px 0; }
-  .hero p { margin-top: 5px; font-size: 12px; }
-  .top-ad { height: 198px; }
+  .hero { height: 90px; min-height: 90px; padding: 12px 26px; margin: 14px 0 16px; display: flex; align-items: center; }
+  .hero-copy { display: flex; align-items: center; justify-content: space-between; gap: 22px; max-width: none; width: 100%; }
+  .hero .eyebrow { flex: 0 0 auto; font-size: 10px; }
+  .hero h1 { flex: 0 0 auto; font-size: 22px; line-height: 1.1; margin: 0; }
+  .hero p { flex: 0 1 420px; margin: 0; font-size: 12px; line-height: 1.35; }
+  .hero:after { font-size: 120px; top: -25px; right: 3%; }
 }
 @media (max-width: 760px) {
-  .hero { min-height: 118px; padding: 14px 20px; margin-bottom: 16px; }
-  .hero h1 { font-size: 23px; margin: 5px 0; }
-  .hero p { margin-top: 5px; font-size: 12px; }
-  .top-ad { height: 168px; }
+  .hero { height: auto; min-height: 90px; padding: 12px 16px; margin: 12px 0 14px; }
+  .hero h1 { font-size: 21px; line-height: 1.1; margin: 4px 0; }
+  .hero .eyebrow { font-size: 9px; }
+  .hero p { margin-top: 4px; font-size: 11px; line-height: 1.3; }
+  .hero:after { font-size: 110px; top: -20px; }
 }
