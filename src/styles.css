@@ -49,3 +49,12 @@
 .photo-slot .photo-preview img {
   object-fit: contain;
 }
+
+/* Correção das fotos nos cartões de anúncios da página principal */
+.ad-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
