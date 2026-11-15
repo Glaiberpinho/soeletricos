@@ -110,3 +110,10 @@
     object-fit: contain;
   }
 }
+
+/* Ajuste solicitado: publicidade horizontal com o dobro da altura. */
+.top-ad{height:264px}
+@media(max-width:760px){
+  .top-ad{height:224px}
+  .top-ad.campaign-ad{height:224px;min-height:224px;aspect-ratio:auto}
+}

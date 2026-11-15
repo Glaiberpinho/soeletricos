@@ -489,7 +489,6 @@ function App() {
     </header>
 
     <main>
-      <section className="hero"><div className="hero-copy"><span className="eyebrow"><Zap size={14}/> O futuro é elétrico</span><h1>Seu próximo carro<br/><em>é elétrico.</em></h1><p>Encontre, compare e negocie veículos elétricos diretamente com os anunciantes.</p></div></section>
       <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
       <section className="search-panel"><div className="search-input-wrap"><Search size={21}/><input value={search} onChange={e => doSearch(e.target.value)} placeholder="Busque por marca, modelo, preço ou qualquer característica..." /></div><button className="search-button" onClick={() => setPage(1)}>Buscar</button></section>
       <div className="content-layout">
