@@ -86,7 +86,7 @@ function CampaignSlot({ campaigns, position }) {
     ? <section className="top-ad" aria-label="Espaço publicitário superior"><span className="ad-label">PUBLICIDADE</span><div><strong>SEU ANÚNCIO AQUI</strong><small>Espaço para banner publicitário horizontal</small></div></section>
     : <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
   return horizontal
-    ? <section className="top-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><img src={campaign.imageUrl} alt={campaign.name} /></a></section>
+    ? <section className="top-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><picture style={{ display: 'block', width: '100%', height: '100%' }}>{campaign.mobileImageUrl && <source media="(max-width: 760px)" srcSet={campaign.mobileImageUrl} />}<img src={campaign.imageUrl} alt={campaign.name} style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }} /></picture></a></section>
     : <aside className="side-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><img src={campaign.imageUrl} alt={campaign.name}/></a></aside>
 }
 
@@ -117,6 +117,7 @@ function App() {
   const [campaignState, setCampaignState] = useState('')
   const [campaignPosition, setCampaignPosition] = useState('horizontal')
   const [campaignImage, setCampaignImage] = useState('')
+  const [campaignMobileImage, setCampaignMobileImage] = useState('')
   const [campaignUrl, setCampaignUrl] = useState('')
   const [campaignStart, setCampaignStart] = useState('')
   const [campaignEnd, setCampaignEnd] = useState('')
@@ -196,22 +197,27 @@ function App() {
   async function saveCampaign() {
     if (!isAdmin) return
     const name = campaignName.trim(), city = campaignCity.trim(), state = campaignState.trim().toUpperCase()
-    let imageUrl, destinationUrl
+    let imageUrl, destinationUrl, mobileImageUrl
     try {
       imageUrl = new URL(campaignImage.trim())
       destinationUrl = new URL(campaignUrl.trim())
       if (imageUrl.protocol !== 'https:' || destinationUrl.protocol !== 'https:') throw Error('HTTPS obrigatório')
+      if (campaignMobileImage.trim()) {
+        mobileImageUrl = new URL(campaignMobileImage.trim())
+        if (mobileImageUrl.protocol !== 'https:') throw Error('HTTPS obrigatório')
+      }
     } catch { return setNotice('Informe links HTTPS válidos para a imagem/GIF e o destino.') }
     if (!name || !city || !/^[A-Z]{2}$/.test(state)) return setNotice('Informe anunciante, cidade e UF com duas letras.')
     if (campaignStart && campaignEnd && campaignEnd < campaignStart) return setNotice('A data final não pode ser anterior à inicial.')
     setBusy(true)
     try {
       const data = { name, city, state, position: campaignPosition, imageUrl: imageUrl.href,
+        ...(mobileImageUrl ? { mobileImageUrl: mobileImageUrl.href } : {}),
         destinationUrl: destinationUrl.href, startDate: campaignStart, endDate: campaignEnd,
         active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
       const ref = await addDoc(collection(db, 'campaigns'), data)
       setCampaigns(old => [...old, { ...data, id: ref.id }])
-      setCampaignName(''); setCampaignCity(''); setCampaignState(''); setCampaignImage(''); setCampaignUrl('')
+      setCampaignName(''); setCampaignCity(''); setCampaignState(''); setCampaignImage(''); setCampaignMobileImage(''); setCampaignUrl('')
       setCampaignStart(''); setCampaignEnd('')
       setNotice('Campanha cadastrada no Firebase.')
     } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Confira as regras de campaigns no Firestore.') }
@@ -518,7 +524,8 @@ function App() {
         <label>Anunciante</label><input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Nome da empresa" maxLength={120}/>
         <div className="two-fields"><div><label>Cidade</label><input value={campaignCity} onChange={e => setCampaignCity(e.target.value)} placeholder="Belo Horizonte"/></div><div><label>UF</label><input value={campaignState} onChange={e => setCampaignState(e.target.value)} placeholder="MG" maxLength={2}/></div></div>
         <label>Espaço publicitário</label><select value={campaignPosition} onChange={e => setCampaignPosition(e.target.value)}><option value="horizontal">Horizontal superior</option><option value="left">Lateral esquerda</option><option value="right">Lateral direita</option></select>
-        <label>Endereço HTTPS da imagem ou GIF</label><input value={campaignImage} onChange={e => setCampaignImage(e.target.value)} placeholder="https://.../banners/empresa.gif"/>
+        <label>Imagem ou GIF para computador (HTTPS)</label><input value={campaignImage} onChange={e => setCampaignImage(e.target.value)} placeholder="https://.../banners/empresa-pc.jpg"/>
+        <label>Imagem ou GIF para celular (HTTPS, opcional)</label><input value={campaignMobileImage} onChange={e => setCampaignMobileImage(e.target.value)} placeholder="https://.../banners/empresa-celular.jpg"/>
         <label>Link HTTPS de destino</label><input value={campaignUrl} onChange={e => setCampaignUrl(e.target.value)} placeholder="https://www.anunciante.com.br"/>
         <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={campaignStart} onChange={e => setCampaignStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={campaignEnd} onChange={e => setCampaignEnd(e.target.value)}/></div></div>
         <button className="primary full" disabled={busy} onClick={saveCampaign}>Cadastrar publicidade</button>
