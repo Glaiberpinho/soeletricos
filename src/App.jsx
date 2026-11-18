@@ -145,6 +145,7 @@ function App() {
   const [authLoaded, setAuthLoaded] = useState(false)
   const isAdmin = firebaseUser?.uid === ADMIN_UID
   const [listings, setListings] = useState([])
+  const [listingsLoading, setListingsLoading] = useState(false)
   const [shown, setShown] = useState([])
   const [resultTotal, setResultTotal] = useState(0)
   const [resultsRevision, setResultsRevision] = useState(0)
@@ -471,11 +472,13 @@ function App() {
 
   async function loadListings() {
     if (!firebaseReady || !firebaseUser) return
+    setListingsLoading(true)
     try {
       const constraints = isAdmin ? [] : [where('ownerUid', '==', firebaseUser.uid)]
       const snap = await getDocs(query(collection(db, 'listings'), ...constraints))
       setListings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     } catch (error) { console.error(error); setNotice('Não foi possível carregar os anúncios da conta.') }
+    finally { setListingsLoading(false) }
   }
 
   // Uma ou duas palavras ou prefixos: índice direto e contagem no servidor.
@@ -645,7 +648,7 @@ function App() {
       for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
       const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
       if (totalPhotoBytes > 700 * 1024) throw new Error('As fotos ultrapassaram o limite seguro de 700 KB. Remova uma foto ou escolha imagens menores.')
-      await updateDoc(doc(db, 'listings', editingListing.id), {
+      const updatedFields = {
         title: title.trim(),
         titleWords: titleSearchIndex(title),
         description: description.trim(),
@@ -654,10 +657,16 @@ function App() {
         state: uf,
         photoUrls,
         vehicleType
-      })
+      }
+      await updateDoc(doc(db, 'listings', editingListing.id), updatedFields)
       await setDoc(doc(db, 'listings', editingListing.id, 'private', 'contact'), {
         ownerEmail: user.email.trim().toLowerCase()
       }, { merge: true })
+      // Atualiza o card local imediatamente e consulta novamente a vitrine.
+      // A nova consulta também aplica eventuais mudanças nos filtros da busca.
+      setListings(current => current.map(item => item.id === editingListing.id ? { ...item, ...updatedFields } : item))
+      setShown(current => current.map(item => item.id === editingListing.id ? { ...item, ...updatedFields } : item))
+      setResultsRevision(current => current + 1)
       setEditingListing(null)
       setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity('')
       setModal('myListings')
@@ -748,7 +757,7 @@ function App() {
       <div className="content-layout">
         <CampaignSlot campaigns={localCampaigns} position="left"/>
         <section className="results">
-          <div className="section-heading"><div><div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:8}}><label htmlFor="city-filter" style={{fontSize:13,fontWeight:700}}>Filtre também por cidade</label><div style={{position:'relative',minWidth:210,maxWidth:300}}><input id="city-filter" value={filterCityInput} placeholder="Todas as cidades" autoComplete="off" onFocus={() => setFilterCitiesOpen(true)} onChange={e => { setFilterCityInput(e.target.value); setFilterCitiesOpen(true); if (!e.target.value) {setFilterCity('');setPage(1)} }} style={{width:'100%',padding:'9px 12px',borderRadius:8,border:'1px solid #bbb'}}/>{filterCityInput && <button type="button" onClick={() => {setFilterCityInput('');setFilterCity('');setPage(1);setFilterCitiesOpen(false)}} aria-label="Limpar cidade" style={{position:'absolute',right:3,top:5,background:'transparent',border:0,cursor:'pointer'}}><X size={16}/></button>}{filterCitiesOpen && filterCityInput.trim() && <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:20,maxHeight:210,overflowY:'auto',background:'white',border:'1px solid #ccc',borderRadius:6,boxShadow:'0 4px 12px #0002'}}>{filterCities.filter(c => normalizePlace(`${c.city} ${c.state}`).includes(normalizePlace(filterCityInput))).slice(0,25).map(c => <button type="button" key={`${c.state}-${c.city}`} style={{display:'block',width:'100%',textAlign:'left',padding:9,background:'white',border:0,cursor:'pointer'}} onClick={() => {setFilterCity(`${c.state}|${c.city}`);setFilterCityInput(`${c.city} - ${c.state}`);setFilterCitiesOpen(false);setPage(1)}}>{c.city} - {c.state}</button>)}</div>}</div></div><h2>Carros elétricos à venda</h2></div><span className="result-count">{resultTotal} anúncios</span></div>
+          <div className="section-heading"><div><div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:8}}><label htmlFor="city-filter" style={{fontSize:13,fontWeight:700}}>Filtre também por cidade</label><div style={{position:'relative',minWidth:210,maxWidth:300}}><input id="city-filter" value={filterCityInput} placeholder="Todas as cidades" autoComplete="off" onFocus={() => setFilterCitiesOpen(true)} onChange={e => { setFilterCityInput(e.target.value); setFilterCitiesOpen(true); if (!e.target.value) {setFilterCity('');setPage(1)} }} style={{width:'100%',padding:'9px 12px',borderRadius:8,border:'1px solid #bbb'}}/>{filterCityInput && <button type="button" onClick={() => {setFilterCityInput('');setFilterCity('');setPage(1);setFilterCitiesOpen(false)}} aria-label="Limpar cidade" style={{position:'absolute',right:3,top:5,background:'transparent',border:0,cursor:'pointer'}}><X size={16}/></button>}{filterCitiesOpen && filterCityInput.trim() && <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:20,maxHeight:210,overflowY:'auto',background:'white',border:'1px solid #ccc',borderRadius:6,boxShadow:'0 4px 12px #0002'}}>{filterCities.filter(c => normalizePlace(`${c.city} ${c.state}`).includes(normalizePlace(filterCityInput))).slice(0,25).map(c => <button type="button" key={`${c.state}-${c.city}`} style={{display:'block',width:'100%',textAlign:'left',padding:9,background:'white',border:0,cursor:'pointer'}} onClick={() => {setFilterCity(`${c.state}|${c.city}`);setFilterCityInput(`${c.city} - ${c.state}`);setFilterCitiesOpen(false);setPage(1)}}>{c.city} - {c.state}</button>)}</div>}</div></div><h2>Carros elétricos à venda</h2></div><span className="result-count">{resultTotal} {resultTotal === 1 ? 'anúncio' : 'anúncios'}</span></div>
           {loadingResults ? <div className="empty"><p>Buscando anúncios...</p></div> : shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
           {pages > 1 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}><ChevronLeft size={18}/> Anterior</button><span>Página {page} de {pages}</span><button disabled={page === pages} onClick={() => setPage(p => p + 1)}>Próxima <ChevronRight size={18}/></button></div>}
         </section>
@@ -780,7 +789,7 @@ function App() {
         <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
-      {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
+      {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
       {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Total de carregamentos da página desde a ativação do contador, incluindo atualizações (F5). Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
 
       {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
