@@ -287,6 +287,7 @@ function App() {
   async function recoverPassword() {
     if (!email.trim()) return setNotice('Informe seu e-mail para receber o link de recuperação.')
     try {
+      auth.languageCode = 'pt-BR'
       await sendPasswordResetEmail(auth, email.trim())
       setNotice('Se o e-mail estiver cadastrado, você receberá instruções para redefinir sua senha.')
     } catch (error) { console.error(error); setNotice('Não foi possível solicitar a recuperação de senha.') }
