@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { auth, db, firebaseReady } from './firebase'
 import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId } from 'firebase/firestore'
+import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
 const ADMIN_UID = 'y97qT8VFbbRcf2UFXy69tj8hSnH2'
@@ -153,6 +153,8 @@ function App() {
   const [filterCityInput, setFilterCityInput] = useState('')
   const [filterCities, setFilterCities] = useState([])
   const [filterCitiesOpen, setFilterCitiesOpen] = useState(false)
+  const [backupStatus, setBackupStatus] = useState('')
+  const backupInput = useRef(null)
   const [stats, setStats] = useState(0)
   const [statsLoading, setStatsLoading] = useState(false)
   const [newPassword, setNewPassword] = useState('')
@@ -271,6 +273,93 @@ function App() {
       setNotice(`${updated} anúncios indexados. Atualize a pesquisa.`)
     } catch (error) { console.error(error); setNotice('Erro ao indexar. Confira as regras do Firestore.') }
     finally { setBusy(false) }
+  }
+
+  // Exporta todos os anúncios, incluindo fotos em base64 e IDs originais.
+  // Não inclui documentos privados, contas de usuários ou propostas.
+  async function downloadBackup() {
+    if (!isAdmin || busy) return
+    setBusy(true)
+    setBackupStatus('Preparando backup...')
+    try {
+      const records = []
+      let cursor = null
+      while (true) {
+        const q = query(collection(db, 'listings'), orderBy(documentId()), ...(cursor ? [startAfter(cursor)] : []), limit(100))
+        const snap = await getDocs(q)
+        for (const d of snap.docs) {
+          const data = d.data()
+          records.push({ id: d.id, ...data, createdAt: data.createdAt?.toDate?.()?.toISOString() || null })
+        }
+        setBackupStatus(`Preparando backup: ${records.length} anúncios...`)
+        if (snap.size < 100) break
+        cursor = snap.docs[snap.docs.length - 1]
+      }
+      const payload = { format: 'soeletricos-listings-backup', version: 1, exportedAt: new Date().toISOString(), count: records.length, listings: records }
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `soeletricos-backup-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setBackupStatus(`Backup de ${records.length} anúncios gerado. Guarde o arquivo em local seguro.`)
+    } catch (error) {
+      console.error(error)
+      setBackupStatus('Falha no backup. Não utilize um arquivo incompleto; tente novamente.')
+    } finally { setBusy(false) }
+  }
+
+  // Restaura somente documentos ausentes, com o mesmo ID e proprietário.
+  // Uma transação impede sobrescrever anúncios publicados entre a verificação e a gravação.
+  async function restoreBackup(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !isAdmin || busy) return
+    setBusy(true)
+    try {
+      const payload = JSON.parse(await file.text())
+      if (payload.format !== 'soeletricos-listings-backup' || payload.version !== 1 ||
+          !Array.isArray(payload.listings) || payload.count !== payload.listings.length) {
+        throw new Error('Arquivo não é um backup válido do Só Elétricos.')
+      }
+      if (new Set(payload.listings.map(x => x.id)).size !== payload.listings.length) throw new Error('IDs duplicados no backup.')
+      if (!confirm(`O arquivo contém ${payload.listings.length} anúncios. Restaurar SOMENTE os que não existem no Firebase? Anúncios atuais não serão apagados nem sobrescritos. A restauração consome gravações e pode ser retomada com o mesmo arquivo.`)) return
+      let restored = 0, skipped = 0
+      for (const item of payload.listings) {
+        if (!item || typeof item.id !== 'string' || !/^[a-zA-Z0-9]{1,100}$/.test(item.id) ||
+            typeof item.ownerUid !== 'string' || !item.ownerUid ||
+            typeof item.title !== 'string' || typeof item.description !== 'string' ||
+            !Array.isArray(item.photoUrls) || item.photoUrls.length > 4 ||
+            !item.photoUrls.every(x => typeof x === 'string') ||
+            typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price <= 0 ||
+            typeof item.city !== 'string' || typeof item.state !== 'string' ||
+            !['electric', 'hybrid'].includes(item.vehicleType)) {
+          throw new Error(`Registro inválido no backup (${restored + skipped + 1}).`)
+        }
+        const ref = doc(db, 'listings', item.id)
+        const data = {
+          title: item.title, titleWords: titleSearchIndex(item.title), description: item.description,
+          price: item.price, city: item.city, state: item.state, photoUrls: item.photoUrls,
+          vehicleType: item.vehicleType, ownerUid: item.ownerUid,
+          createdAt: item.createdAt ? Timestamp.fromDate(new Date(item.createdAt)) : serverTimestamp()
+        }
+        const inserted = await runTransaction(db, async tx => {
+          const existing = await tx.get(ref)
+          if (existing.exists()) return false
+          tx.set(ref, data)
+          return true
+        })
+        if (inserted) restored++; else skipped++
+        if ((restored + skipped) % 20 === 0) setBackupStatus(`Restauração: ${restored} recuperados, ${skipped} já existentes...`)
+      }
+      setBackupStatus(`Concluído: ${restored} anúncios recuperados e ${skipped} já existentes. Os contatos privados não fazem parte deste backup.`)
+      await loadListings()
+      setResultsRevision(n => n + 1)
+    } catch (error) {
+      console.error(error)
+      setBackupStatus(`Restauração interrompida: ${error.message}. Você pode repetir o mesmo arquivo; anúncios existentes serão ignorados.`)
+    } finally { setBusy(false) }
   }
 
   async function loadStats() {
@@ -690,7 +779,7 @@ function App() {
         <button className="primary full" disabled={busy} onClick={saveCampaign}>Cadastrar publicidade</button>
         <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
-      {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
+      {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
       {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Total de carregamentos da página desde a ativação do contador, incluindo atualizações (F5). Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
 
