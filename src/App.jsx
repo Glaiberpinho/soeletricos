@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import {
   Search, CarFront, Plus, UserRound, LogOut, ChevronLeft, ChevronRight,
   X, Mail, Upload, Zap, MapPin, Trash2, ArrowLeft, Pencil, ImagePlus
 } from 'lucide-react'
 import { auth, db, firebaseReady } from './firebase'
-import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
+import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
+import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
 const ADMIN_UID = 'y97qT8VFbbRcf2UFXy69tj8hSnH2'
@@ -71,6 +71,28 @@ function normalizePlace(value) {
     .toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
+function titleTokens(value) {
+  return [...new Set(normalizePlace(value).match(/[a-z0-9]+/g) || [])]
+}
+function titleSearchIndex(value) {
+  const words = titleTokens(value)
+  const pairs = []
+  for (let i = 0; i < words.length; i++) {
+    for (let j = i + 1; j < words.length; j++) {
+      pairs.push(`pair:${[words[i], words[j]].sort().join('|')}`)
+    }
+  }
+  return [...words.map(word => `word:${word}`), ...pairs]
+}
+function titleSearchKey(tokens) {
+  if (tokens.length === 1) return `word:${tokens[0]}`
+  return `pair:${tokens.slice(0, 2).sort().join('|')}`
+}
+function matchesTitle(item, tokens) {
+  const words = titleTokens(item.title)
+  return tokens.every(word => words.includes(word))
+}
+
 function CampaignSlot({ campaigns, position }) {
   const options = campaigns.filter(c => c.position === position)
   const [index, setIndex] = useState(0)
@@ -110,6 +132,21 @@ function App() {
   const [authLoaded, setAuthLoaded] = useState(false)
   const isAdmin = firebaseUser?.uid === ADMIN_UID
   const [listings, setListings] = useState([])
+  const [shown, setShown] = useState([])
+  const [resultTotal, setResultTotal] = useState(0)
+  const [resultsRevision, setResultsRevision] = useState(0)
+  const [loadingResults, setLoadingResults] = useState(false)
+  const [filterCity, setFilterCity] = useState('')
+  const [filterCityInput, setFilterCityInput] = useState('')
+  const [filterCities, setFilterCities] = useState([])
+  const [filterCitiesOpen, setFilterCitiesOpen] = useState(false)
+  const [stats, setStats] = useState(0)
+  const [statsLoading, setStatsLoading] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [currentPassword, setCurrentPassword] = useState('')
+  const resultRequest = useRef(0)
+  const pageCursors = useRef({ key: "", cursors: [] })
+
   const [visitorPlace, setVisitorPlace] = useState(null)
   const [campaigns, setCampaigns] = useState([])
   const [campaignName, setCampaignName] = useState('')
@@ -159,7 +196,6 @@ function App() {
         setNotice('Não foi possível conectar ao Firebase. Verifique se o login anônimo está ativado.')
       })
     })
-    loadListings()
     return unsubscribe
   }, [])
 
@@ -184,6 +220,80 @@ function App() {
       .then(snapshot => setCampaigns(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))))
       .catch(error => console.warn('Publicidade indisponível:', error))
   }, [])
+
+  useEffect(() => {
+    if (!filterCitiesOpen || filterCities.length) return
+    fetch('https://servicodados.ibge.gov.br/api/v1/localidades/municipios')
+      .then(r => { if (!r.ok) throw Error('IBGE indisponível'); return r.json() })
+      .then(data => setFilterCities(data.map(c => ({
+        city: c.nome, state: c.microrregiao?.mesorregiao?.UF?.sigla || c['regiao-imediata']?.['regiao-intermediaria']?.UF?.sigla || ''
+      })).filter(c => c.state).sort((a,b) => a.city.localeCompare(b.city, 'pt-BR'))))
+      .catch(() => setNotice('Não foi possível carregar as cidades do IBGE.'))
+  }, [filterCitiesOpen, filterCities.length])
+
+  useEffect(() => {
+    if (!firebaseReady) return
+    // Conta uma visita por navegador a cada 30 minutos desde o último registro.
+    const key = 'soeletricos_last_visit'
+    const now = Date.now()
+    try {
+      const last = Number(localStorage.getItem(key) || 0)
+      if (now - last < 30 * 60 * 1000) return
+      localStorage.setItem(key, String(now))
+      addDoc(collection(db, 'visits'), { createdAt: serverTimestamp() })
+        .catch(error => console.warn('Contagem de visitas indisponível:', error))
+    } catch (error) { console.warn('Armazenamento local indisponível:', error) }
+  }, [])
+
+  async function indexExistingListings() {
+    if (!isAdmin) return
+    if (!confirm('Indexar títulos dos anúncios existentes? Nenhuma foto ou anúncio será apagado.')) return
+    setBusy(true)
+    try {
+      const snap = await getDocs(collection(db, 'listings'))
+      let updated = 0
+      for (const d of snap.docs) {
+        const words = titleSearchIndex(d.data().title)
+        if (JSON.stringify(d.data().titleWords || []) !== JSON.stringify(words)) {
+          await updateDoc(d.ref, { titleWords: words })
+          updated++
+        }
+      }
+      setNotice(`${updated} anúncios indexados. Atualize a pesquisa.`)
+    } catch (error) { console.error(error); setNotice('Erro ao indexar. Confira as regras do Firestore.') }
+    finally { setBusy(false) }
+  }
+
+  async function loadStats() {
+    if (!isAdmin) return
+    setStatsLoading(true)
+    try {
+      // Agregação no servidor: não baixa documentos individuais de visitas.
+      const snap = await getCountFromServer(collection(db, 'visits'))
+      setStats(snap.data().count)
+    } catch (error) { console.error(error); setNotice('Não foi possível consultar o total de visitas.') }
+    finally { setStatsLoading(false) }
+  }
+
+  async function recoverPassword() {
+    if (!email.trim()) return setNotice('Informe seu e-mail para receber o link de recuperação.')
+    try {
+      await sendPasswordResetEmail(auth, email.trim())
+      setNotice('Se o e-mail estiver cadastrado, você receberá instruções para redefinir sua senha.')
+    } catch (error) { console.error(error); setNotice('Não foi possível solicitar a recuperação de senha.') }
+  }
+
+  async function changePassword() {
+    if (!user || !currentPassword || newPassword.length < 6) return setNotice('Informe a senha atual e uma nova senha de pelo menos 6 caracteres.')
+    setBusy(true)
+    try {
+      await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(user.email, currentPassword))
+      await updatePassword(auth.currentUser, newPassword)
+      setCurrentPassword(''); setNewPassword(''); setModal('')
+      setNotice('Senha alterada com sucesso.')
+    } catch (error) { console.error(error); setNotice('Não foi possível alterar a senha. Confira a senha atual.') }
+    finally { setBusy(false) }
+  }
 
   const localCampaigns = useMemo(() => {
     if (!visitorPlace) return []
@@ -261,43 +371,74 @@ function App() {
   }, [uf])
 
   async function loadListings() {
-    if (!firebaseReady) return
+    if (!firebaseReady || !firebaseUser) return
     try {
-      const q = query(collection(db, 'listings'), orderBy('createdAt', 'desc'))
-      const snap = await getDocs(q)
-      const remote = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      // Preserve todos os anúncios na memória para que o proprietário
-      // encontre os seus independentemente do filtro da vitrine.
-      setListings(remote)
-    } catch (error) {
-      console.error(error)
-      setNotice('Não foi possível carregar os anúncios do Firebase. Verifique as regras do Firestore.')
-    }
+      const constraints = isAdmin ? [] : [where('ownerUid', '==', firebaseUser.uid)]
+      const snap = await getDocs(query(collection(db, 'listings'), ...constraints))
+      setListings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    } catch (error) { console.error(error); setNotice('Não foi possível carregar os anúncios da conta.') }
   }
 
-  const filtered = useMemo(() => {
-    // Pesquisa tolerante a acentos e espaços (ex.: 'Sao Paulo' encontra 'São Paulo').
-    const normalize = value => String(value ?? '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLocaleLowerCase('pt-BR')
-      .replace(/\s+/g, ' ')
-      .trim()
-    const term = normalize(search)
-    // A data de transição afeta apenas a vitrine pública.
-    // Nunca ocultar anúncios do painel do proprietário ou administrador.
-    const publicListings = listings.filter(item => {
-      const time = item.createdAt?.toMillis?.() ?? 0
-      return time >= NEW_LISTINGS_FROM
-    })
-    if (!term) return publicListings
-    return publicListings.filter(item => normalize([
-      item.title, item.description, item.price, item.city, item.state
-    ].filter(value => value !== null && value !== undefined).join(' ')).includes(term))
-  }, [listings, search])
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const shown = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  // Uma ou duas palavras: índice direto e contagem no servidor.
+  // Três ou mais: filtra os candidatos da primeira dupla.
+  // Não baixa a coleção inteira sem filtro para a vitrine.
+  useEffect(() => {
+    if (!firebaseReady) return
+    const requestId = ++resultRequest.current
+    const timeout = setTimeout(async () => {
+      setLoadingResults(true)
+      try {
+        const tokens = titleTokens(search)
+        const constraints = [where('createdAt', '>=', new Date(NEW_LISTINGS_FROM))]
+        if (filterCity) {
+          const [state, ...cityParts] = filterCity.split('|')
+          constraints.push(where('state', '==', state), where('city', '==', cityParts.join('|')))
+        }
+        if (tokens.length) constraints.push(where('titleWords', 'array-contains', titleSearchKey(tokens)))
+        const base = query(collection(db, 'listings'), ...constraints)
+        let total = 0
+        let found = []
+        if (tokens.length <= 2) {
+          const countSnap = await getCountFromServer(base)
+          total = countSnap.data().count
+          const key = `${filterCity}|${search}|${resultsRevision}`
+          if (pageCursors.current.key !== key) pageCursors.current = { key, cursors: [] }
+          const cursors = pageCursors.current.cursors
+          for (let i = cursors.length + 1; i < page; i++) {
+            const previous = i === 1 ? null : cursors[i - 2]
+            const skipped = await getDocs(query(base, orderBy('createdAt', 'desc'), ...(previous ? [startAfter(previous)] : []), limit(PAGE_SIZE)))
+            if (!skipped.docs.length) break
+            cursors[i - 1] = skipped.docs[skipped.docs.length - 1]
+          }
+          const previous = page === 1 ? null : cursors[page - 2]
+          const snap = await getDocs(query(base, orderBy('createdAt', 'desc'), ...(previous ? [startAfter(previous)] : []), limit(PAGE_SIZE)))
+          if (snap.docs.length) cursors[page - 1] = snap.docs[snap.docs.length - 1]
+          found = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        } else {
+          // Para 3+ termos, verifica somente candidatos da primeira dupla.
+          let cursor = null
+          do {
+            const snap = await getDocs(query(base, orderBy('createdAt', 'desc'), ...(cursor ? [startAfter(cursor)] : []), limit(100)))
+            if (!snap.size) break
+            for (const d of snap.docs) {
+              const item = { id: d.id, ...d.data() }
+              if (matchesTitle(item, tokens)) {
+                if (total >= (page - 1) * PAGE_SIZE && found.length < PAGE_SIZE) found.push(item)
+                total++
+              }
+            }
+            cursor = snap.docs[snap.docs.length - 1]
+            if (snap.size < 100) break
+          } while (true)
+        }
+        if (requestId === resultRequest.current) { setResultTotal(total); setShown(found) }
+      } catch (error) { console.error(error); if (requestId === resultRequest.current) { setShown([]); setResultTotal(0); setNotice('Não foi possível pesquisar anúncios. Verifique os índices do Firestore.') } }
+      finally { if (requestId === resultRequest.current) setLoadingResults(false) }
+    }, 250)
+    return () => { clearTimeout(timeout); resultRequest.current++ }
+  }, [search, filterCity, page, resultsRevision])
 
+  const pages = Math.max(1, Math.ceil(resultTotal / PAGE_SIZE))
   function doSearch(value) { setSearch(value); setPage(1) }
 
   async function register() {
@@ -352,6 +493,7 @@ function App() {
 
       const listingRef = await addDoc(collection(db, 'listings'), {
         title: title.trim(),
+        titleWords: titleSearchIndex(title),
         description: description.trim(),
         price: numericPrice,
         city,
@@ -406,6 +548,7 @@ function App() {
       if (totalPhotoBytes > 700 * 1024) throw new Error('As fotos ultrapassaram o limite seguro de 700 KB. Remova uma foto ou escolha imagens menores.')
       await updateDoc(doc(db, 'listings', editingListing.id), {
         title: title.trim(),
+        titleWords: titleSearchIndex(title),
         description: description.trim(),
         price: numericPrice,
         city,
@@ -490,10 +633,12 @@ function App() {
         <span>SÓ<span className="brand-green">ELÉTRICOS</span><small>CLASSIFICADOS DE VEÍCULOS ELÉTRICOS</small></span>
       </a>
       <nav>
-        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings') }}>Administrar anúncios</button>}
+        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings'); loadListings() }}>Administrar anúncios</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('campaigns') }}>Publicidade</button>}
-        {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings') }}>Meus Anúncios</button>}
+        {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings'); loadListings() }}>Meus Anúncios</button>}
         {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+        {user && <button className="nav-link" onClick={() => setModal('password')}>Alterar senha</button>}
+        {isAdmin && <button className="nav-link" onClick={() => { setModal('stats'); loadStats() }}>Estatísticas</button>}
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
       </nav>
     </header>
@@ -504,8 +649,8 @@ function App() {
       <div className="content-layout">
         <CampaignSlot campaigns={localCampaigns} position="left"/>
         <section className="results">
-          <div className="section-heading"><div><span className="eyebrow dark">VITRINE DE OPORTUNIDADES</span><h2>Carros elétricos à venda</h2></div><span className="result-count">{filtered.length} anúncios</span></div>
-          {shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
+          <div className="section-heading"><div><div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:8}}><label htmlFor="city-filter" style={{fontSize:13,fontWeight:700}}>Filtre também por cidade</label><div style={{position:'relative',minWidth:210,maxWidth:300}}><input id="city-filter" value={filterCityInput} placeholder="Todas as cidades" autoComplete="off" onFocus={() => setFilterCitiesOpen(true)} onChange={e => { setFilterCityInput(e.target.value); setFilterCitiesOpen(true); if (!e.target.value) {setFilterCity('');setPage(1)} }} style={{width:'100%',padding:'9px 12px',borderRadius:8,border:'1px solid #bbb'}}/>{filterCityInput && <button type="button" onClick={() => {setFilterCityInput('');setFilterCity('');setPage(1);setFilterCitiesOpen(false)}} aria-label="Limpar cidade" style={{position:'absolute',right:3,top:5,background:'transparent',border:0,cursor:'pointer'}}><X size={16}/></button>}{filterCitiesOpen && filterCityInput.trim() && <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:20,maxHeight:210,overflowY:'auto',background:'white',border:'1px solid #ccc',borderRadius:6,boxShadow:'0 4px 12px #0002'}}>{filterCities.filter(c => normalizePlace(`${c.city} ${c.state}`).includes(normalizePlace(filterCityInput))).slice(0,25).map(c => <button type="button" key={`${c.state}-${c.city}`} style={{display:'block',width:'100%',textAlign:'left',padding:9,background:'white',border:0,cursor:'pointer'}} onClick={() => {setFilterCity(`${c.state}|${c.city}`);setFilterCityInput(`${c.city} - ${c.state}`);setFilterCitiesOpen(false);setPage(1)}}>{c.city} - {c.state}</button>)}</div>}</div></div><h2>Carros elétricos à venda</h2></div><span className="result-count">{resultTotal} anúncios</span></div>
+          {loadingResults ? <div className="empty"><p>Buscando anúncios...</p></div> : shown.length ? <div className="ad-grid">{shown.map(item => <AdCard key={item.id} item={item} onOpen={item => { setSelected(item); setSelectedPhotoIndex(0) }}/>)}</div> : <div className="empty"><CarFront size={36}/><h3>Nenhum anúncio encontrado</h3><p>Tente buscar por outra marca ou modelo.</p></div>}
           {pages > 1 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}><ChevronLeft size={18}/> Anterior</button><span>Página {page} de {pages}</span><button disabled={page === pages} onClick={() => setPage(p => p + 1)}>Próxima <ChevronRight size={18}/></button></div>}
         </section>
         <CampaignSlot campaigns={localCampaigns} position="right"/>
@@ -535,9 +680,12 @@ function App() {
         <button className="primary full" disabled={busy} onClick={saveCampaign}>Cadastrar publicidade</button>
         <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
-      {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
+      {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
-      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button></>}
+      {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Visitas estimadas por navegador, com intervalo mínimo de 30 minutos. Total acumulado desde a ativação, sem reinicialização automática. Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
+
+      {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
+      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
       {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
       {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><div className="two-fields"><div><label>Estado</label><select value={uf} onChange={e => setUf(e.target.value)}><option value="">Selecione</option>{statesList.map(item => <option key={item.id} value={item.sigla}>{item.nome} ({item.sigla})</option>)}</select></div><div><label>Cidade</label><select value={city} onChange={e => setCity(e.target.value)} disabled={!uf || citiesLoading}><option value="">{citiesLoading ? 'Carregando...' : 'Selecione'}</option>{citiesList.map(item => <option key={item.id} value={item.nome}>{item.nome}</option>)}</select></div></div><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
