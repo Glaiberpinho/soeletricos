@@ -71,18 +71,31 @@ function normalizePlace(value) {
     .toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
+// Prefixos de 2 a 6 caracteres, mais a palavra inteira.
+// Limitamos a 8 palavras distintas para manter menos de 1200 entradas por anuncio.
+const SEARCH_MAX_WORDS = 8
 function titleTokens(value) {
   return [...new Set(normalizePlace(value).match(/[a-z0-9]+/g) || [])]
 }
+function wordPrefixes(word) {
+  const prefixes = []
+  for (let size = 2; size <= Math.min(6, word.length); size++) prefixes.push(word.slice(0, size))
+  prefixes.push(word)
+  return [...new Set(prefixes)]
+}
 function titleSearchIndex(value) {
-  const words = titleTokens(value)
-  const pairs = []
-  for (let i = 0; i < words.length; i++) {
-    for (let j = i + 1; j < words.length; j++) {
-      pairs.push(`pair:${[words[i], words[j]].sort().join('|')}`)
+  const words = titleTokens(value).slice(0, SEARCH_MAX_WORDS)
+  const variants = words.map(wordPrefixes)
+  const keys = new Set()
+  for (const options of variants) for (const prefix of options) keys.add(`word:${prefix}`)
+  for (let i = 0; i < variants.length; i++) {
+    for (let j = i + 1; j < variants.length; j++) {
+      for (const first of variants[i]) {
+        for (const second of variants[j]) keys.add(`pair:${[first, second].sort().join('|')}`)
+      }
     }
   }
-  return [...words.map(word => `word:${word}`), ...pairs]
+  return [...keys]
 }
 function titleSearchKey(tokens) {
   if (tokens.length === 1) return `word:${tokens[0]}`
@@ -90,7 +103,7 @@ function titleSearchKey(tokens) {
 }
 function matchesTitle(item, tokens) {
   const words = titleTokens(item.title)
-  return tokens.every(word => words.includes(word))
+  return tokens.every(token => words.some(word => word.startsWith(token)))
 }
 
 function CampaignSlot({ campaigns, position }) {
@@ -233,16 +246,12 @@ function App() {
 
   useEffect(() => {
     if (!firebaseReady) return
-    // Conta uma visita por navegador a cada 30 minutos desde o último registro.
-    const key = 'soeletricos_last_visit'
-    const now = Date.now()
-    try {
-      const last = Number(localStorage.getItem(key) || 0)
-      if (now - last < 30 * 60 * 1000) return
-      localStorage.setItem(key, String(now))
-      addDoc(collection(db, 'visits'), { createdAt: serverTimestamp() })
-        .catch(error => console.warn('Contagem de visitas indisponível:', error))
-    } catch (error) { console.warn('Armazenamento local indisponível:', error) }
+    // Cada carregamento da pagina conta uma visita, inclusive atualizacoes F5.
+    // Evita duplicacao do useEffect no React StrictMode durante desenvolvimento.
+    if (window.__soeletricosVisitSent) return
+    window.__soeletricosVisitSent = true
+    addDoc(collection(db, 'visits'), { createdAt: serverTimestamp() })
+      .catch(error => console.warn('Contagem de visitas indisponível:', error))
   }, [])
 
   async function indexExistingListings() {
@@ -379,7 +388,7 @@ function App() {
     } catch (error) { console.error(error); setNotice('Não foi possível carregar os anúncios da conta.') }
   }
 
-  // Uma ou duas palavras: índice direto e contagem no servidor.
+  // Uma ou duas palavras ou prefixos: índice direto e contagem no servidor.
   // Três ou mais: filtra os candidatos da primeira dupla.
   // Não baixa a coleção inteira sem filtro para a vitrine.
   useEffect(() => {
@@ -645,7 +654,7 @@ function App() {
 
     <main>
       <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
-      <section className="search-panel"><div className="search-input-wrap"><Search size={21}/><input value={search} onChange={e => doSearch(e.target.value)} placeholder="Busque por marca, modelo, preço ou qualquer característica..." /></div><button className="search-button" onClick={() => setPage(1)}>Buscar</button></section>
+      <section className="search-panel"><div className="search-input-wrap"><Search size={21}/><input value={search} onChange={e => doSearch(e.target.value)} placeholder="Busque pelo início das palavras do título (ex.: geel ex, byd ki)..." /></div><button className="search-button" onClick={() => setPage(1)}>Buscar</button></section>
       <div className="content-layout">
         <CampaignSlot campaigns={localCampaigns} position="left"/>
         <section className="results">
@@ -682,7 +691,7 @@ function App() {
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{!listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
-      {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Visitas estimadas por navegador, com intervalo mínimo de 30 minutos. Total acumulado desde a ativação, sem reinicialização automática. Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
+      {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Total de carregamentos da página desde a ativação do contador, incluindo atualizações (F5). Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
 
       {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
