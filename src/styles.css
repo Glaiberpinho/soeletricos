@@ -198,10 +198,11 @@ img, picture, video { max-width: 100%; }
   .sticky-horizontal-ad { padding: 0 12px; }
   .sticky-horizontal-ad .top-ad,
   .sticky-horizontal-ad .top-ad.campaign-ad {
-    height: clamp(52px, 19vh, 86px);
+    /* Mantem o banner completo na horizontal: imagem PC 1280 x 264. */
+    height: auto;
     min-height: 0;
     margin-bottom: 5px;
-    aspect-ratio: auto;
+    aspect-ratio: 1280 / 264;
   }
   .sticky-horizontal-ad .top-ad strong { font-size: 13px; }
   .sticky-horizontal-ad .top-ad small { font-size: 10px; }
