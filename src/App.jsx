@@ -723,15 +723,31 @@ function App() {
     } finally { setBusy(false) }
   }
 
-    async function removeListing(item) {
-    if (item.demo || (item.ownerUid !== firebaseUser?.uid && !isAdmin)) return
+  async function removeListing(item) {
+    if (busy || item.demo || (item.ownerUid !== firebaseUser?.uid && !isAdmin)) return
     if (!confirm('Excluir este anúncio?')) return
+    setBusy(true)
     try {
       await deleteDoc(doc(db, 'listings', item.id, 'private', 'contact')).catch(() => {})
       await deleteDoc(doc(db, 'listings', item.id))
+      // Só retira da interface depois que o Firestore confirmar a exclusão.
+      setListings(current => current.filter(listing => listing.id !== item.id))
+      setShown(current => current.filter(listing => listing.id !== item.id))
+      if (shown.some(listing => listing.id === item.id)) {
+        setResultTotal(current => Math.max(0, current - 1))
+      }
+      setSelected(current => current?.id === item.id ? null : current)
+      setPage(1)
+      // Refaz busca, total e cursores de paginação sem exigir F5.
+      setResultsRevision(current => current + 1)
+      setNotice('Anúncio excluído do Firebase.')
       await loadListings()
-      setSelected(null); setNotice('Anúncio excluído do Firebase.')
-    } catch (error) { setNotice(`Não foi possível excluir: ${error?.message || 'erro no Firebase'}`) }
+    } catch (error) {
+      console.error(error)
+      setNotice(`Não foi possível excluir: ${error?.message || 'erro no Firebase'}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return <div className="site-shell">
