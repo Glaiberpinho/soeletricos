@@ -735,6 +735,7 @@ function App() {
   }
 
   return <div className="site-shell">
+    <div className="sticky-top-stack">
     <header className="header">
       <a className="brand" href="#" onClick={() => { setSelected(null); setModal('') }}>
         <span className="brand-mark"><CarFront size={25}/><Zap size={12}/></span>
@@ -750,9 +751,12 @@ function App() {
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
       </nav>
     </header>
+      <div className="sticky-horizontal-ad">
+        <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
+      </div>
+    </div>
 
     <main>
-      <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
       <section className="search-panel"><div className="search-input-wrap"><Search size={21}/><input value={search} onChange={e => doSearch(e.target.value)} placeholder="Busque pelo início das palavras do título (ex.: geel ex, byd ki)..." /></div><button className="search-button" onClick={() => setPage(1)}>Buscar</button></section>
       <div className="content-layout">
         <CampaignSlot campaigns={localCampaigns} position="left"/>
