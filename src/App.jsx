@@ -121,7 +121,7 @@ function CampaignSlot({ campaigns, position }) {
     ? <section className="top-ad" aria-label="Espaço publicitário superior"><span className="ad-label">PUBLICIDADE</span><div><strong>SEU ANÚNCIO AQUI</strong><small>Espaço para banner publicitário horizontal</small></div></section>
     : <aside className="side-ad"><span>PUBLICIDADE</span><strong>SEU<br/>ANÚNCIO<br/>AQUI</strong><small>Banner vertical</small></aside>
   return horizontal
-    ? <section className="top-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><picture style={{ display: 'block', width: '100%', height: '100%' }}>{campaign.mobileImageUrl && <source media="(max-width: 760px)" srcSet={campaign.mobileImageUrl} />}<img src={campaign.imageUrl} alt={campaign.name} style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }} /></picture></a></section>
+    ? <section className="top-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><picture style={{ display: 'block', width: '100%', height: '100%' }}>{campaign.mobileImageUrl && <source media="(max-width: 760px) and (orientation: portrait)" srcSet={campaign.mobileImageUrl} />}<img src={campaign.imageUrl} alt={campaign.name} style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }} /></picture></a></section>
     : <aside className="side-ad campaign-ad" aria-label="Publicidade local"><span className="ad-label">PUBLICIDADE</span><a href={campaign.destinationUrl} target="_blank" rel="noopener noreferrer sponsored" aria-label={`Abrir publicidade de ${campaign.name}`}><img src={campaign.imageUrl} alt={campaign.name}/></a></aside>
 }
 
@@ -751,9 +751,9 @@ function App() {
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
       </nav>
     </header>
-      <div className="sticky-horizontal-ad">
-        <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
-      </div>
+    </div>
+    <div className="sticky-horizontal-ad">
+      <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
     </div>
 
     <main>
