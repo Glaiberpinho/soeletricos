@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { auth, db, firebaseReady } from './firebase'
 import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { addDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
+import { addDoc, collection, getDoc, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
 const ADMIN_UID = 'y97qT8VFbbRcf2UFXy69tj8hSnH2'
@@ -244,6 +244,31 @@ function App() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState(null)
+  // Permite abrir diretamente o anuncio que foi compartilhado no e-mail.
+  // Não depende de aparecer na primeira pagina da vitrine ou de filtros ativos.
+  useEffect(() => {
+    if (!firebaseReady) return
+    const listingId = new URLSearchParams(window.location.search).get('anuncio')
+    if (!listingId) return
+    // Evita URLs malformadas e IDs inesperadamente grandes.
+    if (!/^[A-Za-z0-9]{1,128}$/.test(listingId)) return
+    let active = true
+    getDoc(doc(db, 'listings', listingId))
+      .then(snapshot => {
+        if (!active) return
+        if (snapshot.exists()) {
+          setSelected({ id: snapshot.id, ...snapshot.data() })
+          setSelectedPhotoIndex(0)
+        } else {
+          setNotice('Este anúncio não está mais disponível.')
+        }
+      })
+      .catch(error => {
+        console.error('Falha ao abrir anúncio pelo link:', error)
+        if (active) setNotice('Não foi possível abrir este anúncio. Tente novamente.')
+      })
+    return () => { active = false }
+  }, [])
   const [modal, setModal] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -881,10 +906,10 @@ function App() {
 
     <footer><div className="footer-brand">SÓ<span>ELÉTRICOS</span></div><p>Classificados de veículos elétricos. Negocie diretamente com o anunciante.</p><small>© {new Date().getFullYear()} Só Elétricos. Todos os direitos reservados.</small></footer>
 
-    {selected && <div className="overlay" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><section className="detail-modal" onClick={e => e.stopPropagation()}>
-      <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><X/></button>
+    {selected && <div className="overlay" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><section className="detail-modal" onClick={e => e.stopPropagation()}>
+      <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><X/></button>
       <div className="detail-photos">{(() => { const gallery = selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']; const active = Math.min(selectedPhotoIndex, gallery.length - 1); return <><img className="detail-main-photo" src={gallery[active]} alt={`${selected.title} foto principal`} onClick={() => setSelectedPhotoIndex((active + 1) % gallery.length)}/><div className="detail-thumbnails">{gallery.map((src, i) => <button type="button" key={i} className={i === active ? 'active' : ''} onClick={() => setSelectedPhotoIndex(i)} aria-label={`Visualizar foto ${i + 1}`}><img src={src} alt={`${selected.title} miniatura ${i + 1}`}/></button>)}</div></> })()}</div>
-      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0) }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
+      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
         {(firebaseUser?.uid === selected.ownerUid || isAdmin) && <div className="owner-actions">{firebaseUser?.uid === selected.ownerUid && <button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button>}<button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
         <div className="proposal-box"><h3>Gostou deste veículo?</h3><p>Envie uma mensagem diretamente ao anunciante. Ela será encaminhada por e-mail.</p><input type="email" value={proposalEmail} onChange={e => setProposalEmail(e.target.value)} placeholder="Seu e-mail de contato"/><textarea value={proposal} onChange={e => setProposal(e.target.value)} placeholder="Escreva sua mensagem ou proposta..." rows="4"/><button className="primary full" disabled={busy} onClick={sendProposal}><Mail size={17}/> {busy ? 'Enviando...' : 'Enviar mensagem ao anunciante'}</button></div>
       </div>
