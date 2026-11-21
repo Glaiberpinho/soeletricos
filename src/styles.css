@@ -254,3 +254,22 @@ img, picture, video { max-width: 100%; }
 .photo-slot .photo-preview {
   background-color: #e9efeb;
 }
+
+/* 21/11/2026 — sugestões de UF/cidade que funcionam também em celulares. */
+.listing-location-fields { align-items: start; }
+.location-suggest-field { position: relative; min-width: 0; }
+.location-suggest-field input { width: 100%; }
+.location-suggestions {
+  position: absolute; top: 100%; left: 0; right: 0;
+  z-index: 30; max-height: 190px; overflow-y: auto;
+  background: #fff; border: 1px solid #b8cfc0; border-radius: 8px;
+  box-shadow: 0 6px 18px #102b2430; -webkit-overflow-scrolling: touch;
+}
+.location-suggestions button {
+  display: block; width: 100%; border: 0; border-bottom: 1px solid #e8eee9;
+  background: white; color: #243b2b; padding: 11px 9px;
+  text-align: left; cursor: pointer; font: 13px 'DM Sans', sans-serif;
+  touch-action: manipulation;
+}
+.location-suggestions button:hover, .location-suggestions button:focus-visible { background: #edf6ef; }
+@media(max-width: 380px) { .listing-location-fields { grid-template-columns: 1fr; } }
