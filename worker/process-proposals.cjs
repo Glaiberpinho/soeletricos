@@ -1,6 +1,14 @@
 const admin = require('firebase-admin')
 const nodemailer = require('nodemailer')
 
+// Endereco publico do site, sem usar o caminho antigo /soeletricos/.
+const SITE_URL = 'https://www.soeletricosbrasil.com.br/'
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch])
+}
+
 async function main() {
   const serviceAccountText = process.env.FIREBASE_SERVICE_ACCOUNT
   const gmailUser = process.env.GMAIL_USER
@@ -44,12 +52,22 @@ async function main() {
       const recipient = contactSnap.data()?.ownerEmail || listingSnap.data().ownerEmail
       if (!recipient) throw new Error('O anunciante não possui e-mail de contato cadastrado.')
 
+      const listingTitle = String(listingSnap.data().title || 'Anúncio')
+      const listingUrl = new URL(SITE_URL)
+      listingUrl.searchParams.set('anuncio', listingSnap.id)
+      const link = listingUrl.toString()
       await transporter.sendMail({
         from: `Só Elétricos <${gmailUser}>`,
         to: recipient,
         replyTo: proposal.senderEmail,
-        subject: `Nova mensagem sobre seu anúncio: ${listingSnap.data().title}`,
-        text: `Você recebeu uma mensagem pelo Só Elétricos.\n\nAnúncio: ${listingSnap.data().title}\nE-mail de quem enviou: ${proposal.senderEmail}\n\nMensagem:\n${proposal.message}\n\nResponda diretamente a este e-mail para entrar em contato com a pessoa interessada.`
+        subject: `Nova mensagem sobre seu anúncio: ${listingTitle}`,
+        text: `Você recebeu uma mensagem pelo Só Elétricos.\n\nAnúncio: ${listingTitle}\nLink do anúncio: ${link}\nE-mail de quem enviou: ${proposal.senderEmail}\n\nMensagem:\n${proposal.message}\n\nResponda diretamente a este e-mail para entrar em contato com a pessoa interessada.`,
+        html: `<p>Você recebeu uma mensagem pelo Só Elétricos.</p>
+          <p><strong>Anúncio:</strong> <a href="${escapeHtml(link)}">${escapeHtml(listingTitle)}</a></p>
+          <p><strong>E-mail de quem enviou:</strong> ${escapeHtml(proposal.senderEmail)}</p>
+          <p><strong>Mensagem:</strong></p>
+          <p style="white-space:pre-wrap">${escapeHtml(proposal.message)}</p>
+          <p>Responda diretamente a este e-mail para entrar em contato com a pessoa interessada.</p>`
       })
       await proposalRef.update({
         status: 'sent',
