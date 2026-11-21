@@ -236,3 +236,21 @@ img, picture, video { max-width: 100%; }
   object-fit: contain;
   object-position: center;
 }
+
+/* Soeletricos: fotos de veiculos sempre inteiras, com margens quando necessario.
+   Regras finais para prevalecer sobre breakpoints antigos. */
+.ad-photo img,
+.detail-photos .detail-main-photo,
+.detail-photos .detail-thumbnails img,
+.my-listing-row > img,
+.photo-slot .photo-preview img {
+  object-fit: contain;
+  object-position: center;
+}
+.ad-photo,
+.detail-photos,
+.detail-photos .detail-thumbnails button,
+.my-listing-row > img,
+.photo-slot .photo-preview {
+  background-color: #e9efeb;
+}
