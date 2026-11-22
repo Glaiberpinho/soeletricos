@@ -241,6 +241,7 @@ function App() {
   const [campaignUrl, setCampaignUrl] = useState('')
   const [campaignStart, setCampaignStart] = useState('')
   const [campaignEnd, setCampaignEnd] = useState('')
+  const [editingCampaignId, setEditingCampaignId] = useState(null)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState(null)
@@ -497,8 +498,29 @@ function App() {
       && (!c.endDate || new Date(c.endDate + 'T23:59:59').getTime() >= now))
   }, [campaigns, visitorPlace])
 
+  function resetCampaignForm() {
+    setEditingCampaignId(null)
+    setCampaignName(''); setCampaignCity(''); setCampaignState('')
+    setCampaignPosition('horizontal'); setCampaignImage(''); setCampaignMobileImage('')
+    setCampaignUrl(''); setCampaignStart(''); setCampaignEnd('')
+  }
+
+  function editCampaign(c) {
+    setEditingCampaignId(c.id)
+    setCampaignName(c.name || '')
+    setCampaignCity(c.city || '')
+    setCampaignState(c.state || '')
+    setCampaignPosition(c.position || 'horizontal')
+    setCampaignImage(c.imageUrl || '')
+    setCampaignMobileImage(c.mobileImageUrl || '')
+    setCampaignUrl(c.destinationUrl || '')
+    setCampaignStart(c.startDate || '')
+    setCampaignEnd(c.endDate || '')
+    setNotice('Editando publicidade: ' + (c.name || 'sem nome'))
+  }
+
   async function saveCampaign() {
-    if (!isAdmin) return
+    if (!isAdmin || busy) return
     const name = campaignName.trim(), city = campaignCity.trim(), state = campaignState.trim().toUpperCase()
     let imageUrl, destinationUrl, mobileImageUrl
     try {
@@ -514,16 +536,25 @@ function App() {
     if (campaignStart && campaignEnd && campaignEnd < campaignStart) return setNotice('A data final não pode ser anterior à inicial.')
     setBusy(true)
     try {
-      const data = { name, city, state, position: campaignPosition, imageUrl: imageUrl.href,
-        ...(mobileImageUrl ? { mobileImageUrl: mobileImageUrl.href } : {}),
-        destinationUrl: destinationUrl.href, startDate: campaignStart, endDate: campaignEnd,
-        active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
-      const ref = await addDoc(collection(db, 'campaigns'), data)
-      setCampaigns(old => [...old, { ...data, id: ref.id }])
-      setCampaignName(''); setCampaignCity(''); setCampaignState(''); setCampaignImage(''); setCampaignMobileImage(''); setCampaignUrl('')
-      setCampaignStart(''); setCampaignEnd('')
-      setNotice('Campanha cadastrada no Firebase.')
-    } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Confira as regras de campaigns no Firestore.') }
+      const data = {
+        name, city, state, position: campaignPosition,
+        imageUrl: imageUrl.href,
+        mobileImageUrl: mobileImageUrl ? mobileImageUrl.href : '',
+        destinationUrl: destinationUrl.href,
+        startDate: campaignStart, endDate: campaignEnd
+      }
+      if (editingCampaignId) {
+        await updateDoc(doc(db, 'campaigns', editingCampaignId), data)
+        setCampaigns(old => old.map(c => c.id === editingCampaignId ? { ...c, ...data } : c))
+        setNotice('Publicidade atualizada com sucesso.')
+      } else {
+        const newCampaign = { ...data, active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
+        const ref = await addDoc(collection(db, 'campaigns'), newCampaign)
+        setCampaigns(old => [...old, { ...newCampaign, id: ref.id }])
+        setNotice('Campanha cadastrada no Firebase.')
+      }
+      resetCampaignForm()
+    } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Verifique as permissões da coleção campaigns no Firestore.') }
     finally { setBusy(false) }
   }
 
@@ -534,6 +565,7 @@ function App() {
         if (!confirm('Excluir esta publicidade?')) return
         await deleteDoc(doc(db, 'campaigns', c.id))
         setCampaigns(old => old.filter(x => x.id !== c.id))
+        if (editingCampaignId === c.id) resetCampaignForm()
       } else {
         await updateDoc(doc(db, 'campaigns', c.id), { active })
         setCampaigns(old => old.map(x => x.id === c.id ? { ...x, active } : x))
@@ -878,7 +910,7 @@ function App() {
       </a>
       <nav>
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings'); loadListings() }}>Administrar anúncios</button>}
-        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('campaigns') }}>Publicidade</button>}
+        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); resetCampaignForm(); setModal('campaigns') }}>Publicidade</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings'); loadListings() }}>Meus Anúncios</button>}
         {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link" onClick={() => setModal('password')}>Alterar senha</button>}
@@ -924,8 +956,8 @@ function App() {
         <label>Imagem ou GIF para celular (HTTPS, opcional)</label><input value={campaignMobileImage} onChange={e => setCampaignMobileImage(e.target.value)} placeholder="https://.../banners/empresa-celular.jpg"/>
         <label>Link HTTPS de destino</label><input value={campaignUrl} onChange={e => setCampaignUrl(e.target.value)} placeholder="https://www.anunciante.com.br"/>
         <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={campaignStart} onChange={e => setCampaignStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={campaignEnd} onChange={e => setCampaignEnd(e.target.value)}/></div></div>
-        <button className="primary full" disabled={busy} onClick={saveCampaign}>Cadastrar publicidade</button>
-        <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
+        <button className="primary full" disabled={busy} onClick={saveCampaign}>{busy ? 'Salvando...' : editingCampaignId ? 'Salvar alterações da publicidade' : 'Cadastrar publicidade'}</button>{editingCampaignId && <button type="button" className="secondary full" disabled={busy} onClick={resetCampaignForm}>Cancelar edição</button>}
+        <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editCampaign(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
