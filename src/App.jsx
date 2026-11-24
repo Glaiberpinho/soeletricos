@@ -13,7 +13,7 @@ const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 1900 + 3 }, (_, i) => C
 function listingYears(item) {
   const manufacture = Number.isInteger(item.manufactureYear) ? item.manufactureYear : null
   const model = Number.isInteger(item.modelYear) ? item.modelYear : null
-  if (manufacture && model) return `Ano ${manufacture}/${model}`
+  if (manufacture && model) return `${manufacture}/${model}`
   if (manufacture) return `Fabricação ${manufacture}`
   if (model) return `Modelo ${model}`
   return ''
@@ -148,10 +148,14 @@ function AdCard({ item, onOpen }) {
       <span className="electric-tag"><Zap size={12}/> {item.vehicleType === 'hybrid' ? 'Híbrido' : 'Elétrico'}</span>
     </div>
     <div className="ad-info">
-      <h3>{item.title}</h3>
-      <strong>{item.price ? formatCurrency(item.price) : 'Consulte o valor'}</strong>
-      {listingYears(item) && <span className="listing-year-info">{listingYears(item)}</span>}
-      <small><MapPin size={13}/> {item.city ? `${item.city}${item.state ? ` - ${item.state}` : ''}` : 'Contato direto com o anunciante'}</small>
+      <div className="ad-title-row">
+        <h3 title={item.title}>{item.title}</h3>
+        {listingYears(item) && <span className="listing-year-info">{listingYears(item)}</span>}
+      </div>
+      <div className="ad-price-row">
+        <strong>{item.price ? formatCurrency(item.price) : 'Consulte o valor'}</strong>
+        <small className="ad-city" title={item.city ? `${item.city}${item.state ? ` - ${item.state}` : ''}` : ''}><MapPin size={13}/> {item.city ? `${item.city}${item.state ? ` - ${item.state}` : ''}` : 'Local não informado'}</small>
+      </div>
     </div>
   </button>
 }
@@ -973,7 +977,7 @@ function App() {
     {selected && <div className="overlay" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><section className="detail-modal" onClick={e => e.stopPropagation()}>
       <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><X/></button>
       <div className="detail-photos">{(() => { const gallery = selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']; const active = Math.min(selectedPhotoIndex, gallery.length - 1); return <><img className="detail-main-photo" src={gallery[active]} alt={`${selected.title} foto principal`} onClick={() => setSelectedPhotoIndex((active + 1) % gallery.length)}/><div className="detail-thumbnails">{gallery.map((src, i) => <button type="button" key={i} className={i === active ? 'active' : ''} onClick={() => setSelectedPhotoIndex(i)} aria-label={`Visualizar foto ${i + 1}`}><img src={src} alt={`${selected.title} miniatura ${i + 1}`}/></button>)}</div></> })()}</div>
-      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{listingYears(selected) && <p className="detail-year-info">{listingYears(selected)}</p>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
+      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><div className="detail-title-row"><h2>{selected.title}</h2>{listingYears(selected) && <span className="detail-year-info">{listingYears(selected)}</span>}</div><div className="detail-price-row">{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}</div><p className="description">{selected.description}</p>
         {(firebaseUser?.uid === selected.ownerUid || isAdmin) && <div className="owner-actions">{firebaseUser?.uid === selected.ownerUid && <button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button>}<button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
         <div className="proposal-box"><h3>Gostou deste veículo?</h3><p>Envie uma mensagem diretamente ao anunciante. Ela será encaminhada por e-mail.</p><input type="email" value={proposalEmail} onChange={e => setProposalEmail(e.target.value)} placeholder="Seu e-mail de contato"/><textarea value={proposal} onChange={e => setProposal(e.target.value)} placeholder="Escreva sua mensagem ou proposta..." rows="4"/><button className="primary full" disabled={busy} onClick={sendProposal}><Mail size={17}/> {busy ? 'Enviando...' : 'Enviar mensagem ao anunciante'}</button></div>
       </div>
