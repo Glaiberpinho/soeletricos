@@ -73,66 +73,24 @@ function compressImage(file) {
   })
 }
 
-// Máscara de preço para veículos: o usuário digita somente reais em números.
-// Pontos de milhar e ,00 são exibidos automaticamente, sem mudar o preço salvo.
-function formatPriceInput(value) {
-  const digits = String(value ?? '').replace(/\D/g, '').replace(/^0+/, '').slice(0, 12)
-  if (!digits) return ''
-  return `${Number(digits).toLocaleString('pt-BR')},00`
-}
-// Teclado físico: trabalhamos somente com os dígitos de reais.
-// O sufixo visual ",00" não participa da digitação nem do Backspace.
-function handlePriceKeyDown(event, setPrice) {
-  if (event.ctrlKey || event.metaKey || event.altKey) return
-  const isDigit = /^[0-9]$/.test(event.key)
-  const isDelete = event.key === 'Backspace' || event.key === 'Delete'
-  if (!isDigit && !isDelete) return
-  event.preventDefault()
-  const input = event.currentTarget
-  const integerText = input.value.split(',')[0]
-  const digits = integerText.replace(/\D/g, '')
-  const start = Math.min(input.selectionStart ?? integerText.length, integerText.length)
-  const end = Math.min(input.selectionEnd ?? integerText.length, integerText.length)
-  const count = str => (str.match(/\d/g) || []).length
-  let from = count(integerText.slice(0, start))
-  let to = count(integerText.slice(0, end))
-  if (isDigit) {
-    setPrice(formatPriceInput(digits.slice(0, from) + event.key + digits.slice(to)))
-    return
-  }
-  if (from === to) {
-    if (event.key === 'Backspace') from = Math.max(0, from - 1)
-    else if (from < digits.length) to = from + 1
-    else from = Math.max(0, from - 1)
-  }
-  setPrice(formatPriceInput(digits.slice(0, from) + digits.slice(to)))
-}
-
-// Teclados virtuais e colagem: aceita dígitos inseridos antes OU depois de ",00".
-// Também evita que apagar os centavos visuais acrescente zeros ao valor.
-function handlePriceChange(nextText, previousText) {
-  const next = String(nextText ?? '')
-  const previous = String(previousText ?? '')
-  const oldInteger = previous.split(',')[0]
-  if (previous && next.startsWith(oldInteger + ',') && next.length < previous.length) {
-    return formatPriceInput(oldInteger.replace(/\D/g, '').slice(0, -1))
-  }
-  // A máscara exibe centavos fixos. Removemos só esse sufixo, nunca
-  // os novos números digitados depois dele (ex.: '1,002' vira '12').
-  const withoutCents = next.replace(',00', '')
-  return formatPriceInput(withoutCents)
+// Máscara somente de reais inteiros: "129000" vira "129.000".
+// Sem centavos automáticos, para que digitar e apagar (Backspace) funcionem naturalmente.
+function formatPriceEditing(value) {
+  const digits = String(value ?? '').replace(/\D/g, '').slice(0, 12)
+  const normalized = digits.replace(/^0+(?=\d)/, '')
+  return normalized ? normalized.replace(/\B(?=(\d{3})+(?!\d))/g, '.') : ''
 }
 
 function formatStoredPrice(value) {
   const amount = Number(value)
   if (!Number.isFinite(amount) || amount <= 0) return ''
-  return amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatPriceEditing(String(Math.round(amount)))
 }
 
 function formatCurrency(value) {
   const amount = Number(value)
   return Number.isFinite(amount) && amount > 0
-    ? amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })
+    ? amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })
     : 'Consulte o valor'
 }
 
@@ -793,7 +751,7 @@ function App() {
     if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
-    const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
+    const numericPrice = Number(String(price).replace(/\D/g, ''))
     if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) return setNotice('Informe um valor válido para o veículo.')
     if (!uf || !city) return setNotice('Informe o estado e a cidade do veículo.')
     if (!statesList.some(item => item.sigla === uf)) return setNotice('Informe uma UF válida, como MG ou SP.')
@@ -880,7 +838,7 @@ function App() {
     if (!uf || !city) return setNotice('Informe o estado e a cidade do veículo.')
     if (!statesList.some(item => item.sigla === uf)) return setNotice('Informe uma UF válida, como MG ou SP.')
     if (!citiesList.some(item => item.nome.toLocaleLowerCase('pt-BR') === city.trim().toLocaleLowerCase('pt-BR'))) return setNotice('Selecione uma cidade válida da lista de municípios.')
-    const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
+    const numericPrice = Number(String(price).replace(/\D/g, ''))
     if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) return setNotice('Informe um valor válido para o veículo.')
     if (description.trim().length > 5000) return setNotice('A descrição deve ter no máximo 5.000 caracteres.')
     setBusy(true)
@@ -1060,8 +1018,8 @@ function App() {
 
       {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
-      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onKeyDown={e => handlePriceKeyDown(e, setPrice)} onChange={e => setPrice(previous => handlePriceChange(e.target.value, previous))} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
-      {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onKeyDown={e => handlePriceKeyDown(e, setPrice)} onChange={e => setPrice(previous => handlePriceChange(e.target.value, previous))} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
+      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
+      {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={16}/></button></div>}
   </div>
