@@ -8,6 +8,22 @@ import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, 
 import { addDoc, collection, getDoc, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
+const CURRENT_YEAR = new Date().getFullYear()
+const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 1900 + 3 }, (_, i) => CURRENT_YEAR + 2 - i)
+function listingYears(item) {
+  const manufacture = Number.isInteger(item.manufactureYear) ? item.manufactureYear : null
+  const model = Number.isInteger(item.modelYear) ? item.modelYear : null
+  if (manufacture && model) return `Ano ${manufacture}/${model}`
+  if (manufacture) return `Fabricação ${manufacture}`
+  if (model) return `Modelo ${model}`
+  return ''
+}
+function YearFields({ manufactureYear, setManufactureYear, modelYear, setModelYear }) {
+  return <div className="two-fields listing-years">
+    <div><label htmlFor="manufacture-year">Ano de fabricação</label><select id="manufacture-year" value={manufactureYear} onChange={e => setManufactureYear(e.target.value)}><option value="">Selecione o ano</option>{YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}</select></div>
+    <div><label htmlFor="model-year">Ano do modelo</label><select id="model-year" value={modelYear} onChange={e => setModelYear(e.target.value)}><option value="">Selecione o ano</option>{YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}</select></div>
+  </div>
+}
 const ADMIN_UID = 'y97qT8VFbbRcf2UFXy69tj8hSnH2'
 // Data de transição: anúncios antigos não são apagados, apenas ocultados da vitrine.
 const NEW_LISTINGS_FROM = new Date('2026-11-14T00:00:00-03:00').getTime()
@@ -134,6 +150,7 @@ function AdCard({ item, onOpen }) {
     <div className="ad-info">
       <h3>{item.title}</h3>
       <strong>{item.price ? formatCurrency(item.price) : 'Consulte o valor'}</strong>
+      {listingYears(item) && <span className="listing-year-info">{listingYears(item)}</span>}
       <small><MapPin size={13}/> {item.city ? `${item.city}${item.state ? ` - ${item.state}` : ''}` : 'Contato direto com o anunciante'}</small>
     </div>
   </button>
@@ -280,6 +297,8 @@ function App() {
   const [price, setPrice] = useState('')
   const [editingListing, setEditingListing] = useState(null)
   const [vehicleType, setVehicleType] = useState('electric')
+  const [manufactureYear, setManufactureYear] = useState('')
+  const [modelYear, setModelYear] = useState('')
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0)
   const [photos, setPhotos] = useState([])
   const [photoPreviews, setPhotoPreviews] = useState([])
@@ -428,7 +447,11 @@ function App() {
             !item.photoUrls.every(x => typeof x === 'string') ||
             typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price <= 0 ||
             typeof item.city !== 'string' || typeof item.state !== 'string' ||
-            !['electric', 'hybrid'].includes(item.vehicleType)) {
+            !['electric', 'hybrid'].includes(item.vehicleType) ||
+            ((item.manufactureYear != null || item.modelYear != null) &&
+             (!Number.isInteger(item.manufactureYear) || !Number.isInteger(item.modelYear) ||
+              item.manufactureYear < 1900 || item.manufactureYear > 2100 ||
+              item.modelYear < 1900 || item.modelYear > 2100))) {
           throw new Error(`Registro inválido no backup (${restored + skipped + 1}).`)
         }
         const ref = doc(db, 'listings', item.id)
@@ -436,6 +459,7 @@ function App() {
           title: item.title, titleWords: titleSearchIndex(item.title), description: item.description,
           price: item.price, city: item.city, state: item.state, photoUrls: item.photoUrls,
           vehicleType: item.vehicleType, ownerUid: item.ownerUid,
+          ...(item.manufactureYear != null ? { manufactureYear: item.manufactureYear, modelYear: item.modelYear } : {}),
           createdAt: item.createdAt ? Timestamp.fromDate(new Date(item.createdAt)) : serverTimestamp()
         }
         const inserted = await runTransaction(db, async tx => {
@@ -708,6 +732,7 @@ function App() {
     if (!user || !firebaseUser || firebaseUser.isAnonymous) return setNotice('Entre ou crie uma conta com e-mail e senha para publicar anúncios.')
     if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
+    if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
     const numericPrice = Number(String(price).replace(/\./g, '').replace(',', '.'))
     if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) return setNotice('Informe um valor válido para o veículo.')
     if (!uf || !city) return setNotice('Informe o estado e a cidade do veículo.')
@@ -733,6 +758,8 @@ function App() {
         state: uf,
         photoUrls,
         vehicleType,
+        manufactureYear: Number(manufactureYear),
+        modelYear: Number(modelYear),
         ownerUid: currentFirebaseUser.uid,
         createdAt: serverTimestamp()
       })
@@ -745,7 +772,7 @@ function App() {
       const publishedItem = {
         id: listingRef.id, title: title.trim(), titleWords: titleSearchIndex(title),
         description: description.trim(), price: numericPrice, city, state: uf,
-        photoUrls, vehicleType, ownerUid: currentFirebaseUser.uid,
+        photoUrls, vehicleType, manufactureYear: Number(manufactureYear), modelYear: Number(modelYear), ownerUid: currentFirebaseUser.uid,
         createdAt: Timestamp.now()
       }
       setListings(current => [publishedItem, ...current.filter(item => item.id !== listingRef.id)])
@@ -758,7 +785,7 @@ function App() {
         setShown(current => [publishedItem, ...current.filter(item => item.id !== listingRef.id)].slice(0, PAGE_SIZE))
         setResultTotal(current => current + 1)
       }
-      setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('')
+      setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('')
       await loadListings()
       setNotice('Anúncio publicado! As fotos foram comprimidas e salvas no Firestore.')
     } catch (error) {
@@ -775,6 +802,8 @@ function App() {
     setDescription(item.description || '')
     setPrice(item.price != null ? String(item.price).replace('.', ',') : '')
     setVehicleType(item.vehicleType === 'hybrid' ? 'hybrid' : 'electric')
+    setManufactureYear(item.manufactureYear != null ? String(item.manufactureYear) : '')
+    setModelYear(item.modelYear != null ? String(item.modelYear) : '')
     setUf(item.state || '')
     setCity(item.city || '')
     const existingPhotos = Array.isArray(item.photoUrls) ? item.photoUrls.slice(0, 4) : []
@@ -787,6 +816,7 @@ function App() {
   async function saveListingChanges() {
     if (!editingListing || editingListing.ownerUid !== firebaseUser?.uid) return setNotice('Você não tem permissão para editar este anúncio.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
+    if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
     if (!uf || !city) return setNotice('Informe o estado e a cidade do veículo.')
     if (!statesList.some(item => item.sigla === uf)) return setNotice('Informe uma UF válida, como MG ou SP.')
     if (!citiesList.some(item => item.nome.toLocaleLowerCase('pt-BR') === city.trim().toLocaleLowerCase('pt-BR'))) return setNotice('Selecione uma cidade válida da lista de municípios.')
@@ -807,7 +837,9 @@ function App() {
         city,
         state: uf,
         photoUrls,
-        vehicleType
+        vehicleType,
+        manufactureYear: Number(manufactureYear),
+        modelYear: Number(modelYear)
       }
       await updateDoc(doc(db, 'listings', editingListing.id), updatedFields)
       await setDoc(doc(db, 'listings', editingListing.id, 'private', 'contact'), {
@@ -819,7 +851,7 @@ function App() {
       setShown(current => current.map(item => item.id === editingListing.id ? { ...item, ...updatedFields } : item))
       setResultsRevision(current => current + 1)
       setEditingListing(null)
-      setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity('')
+      setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity('')
       setModal('myListings')
       await loadListings()
       setNotice('Anúncio atualizado com sucesso!')
@@ -912,7 +944,7 @@ function App() {
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings'); loadListings() }}>Administrar anúncios</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); resetCampaignForm(); setModal('campaigns') }}>Publicidade</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings'); loadListings() }}>Meus Anúncios</button>}
-        {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+        {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link" onClick={() => setModal('password')}>Alterar senha</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setModal('stats'); loadStats() }}>Estatísticas</button>}
         {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
@@ -941,7 +973,7 @@ function App() {
     {selected && <div className="overlay" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><section className="detail-modal" onClick={e => e.stopPropagation()}>
       <button className="close" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><X/></button>
       <div className="detail-photos">{(() => { const gallery = selected.photoUrls?.length ? selected.photoUrls : ['https://placehold.co/900x600/eaf1ed/426354?text=Sem+foto']; const active = Math.min(selectedPhotoIndex, gallery.length - 1); return <><img className="detail-main-photo" src={gallery[active]} alt={`${selected.title} foto principal`} onClick={() => setSelectedPhotoIndex((active + 1) % gallery.length)}/><div className="detail-thumbnails">{gallery.map((src, i) => <button type="button" key={i} className={i === active ? 'active' : ''} onClick={() => setSelectedPhotoIndex(i)} aria-label={`Visualizar foto ${i + 1}`}><img src={src} alt={`${selected.title} miniatura ${i + 1}`}/></button>)}</div></> })()}</div>
-      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
+      <div className="detail-content"><button className="back-link" onClick={() => { setSelected(null); setSelectedPhotoIndex(0); const u = new URL(window.location.href); if (u.searchParams.has('anuncio')) { u.searchParams.delete('anuncio'); window.history.replaceState(null, '', u.pathname + u.search + u.hash) } }}><ArrowLeft size={15}/> Voltar aos anúncios</button><span className="eyebrow dark">VEÍCULO ELÉTRICO</span><h2>{selected.title}</h2>{selected.price > 0 && <div className="detail-price">{formatCurrency(selected.price)}</div>}{listingYears(selected) && <p className="detail-year-info">{listingYears(selected)}</p>}{selected.city && <p className="location"><MapPin size={14}/> {selected.city}{selected.state ? ` - ${selected.state}` : ''}</p>}<p className="description">{selected.description}</p>
         {(firebaseUser?.uid === selected.ownerUid || isAdmin) && <div className="owner-actions">{firebaseUser?.uid === selected.ownerUid && <button className="edit-button" onClick={() => openEditListing(selected)}><Pencil size={15}/> Editar anúncio</button>}<button className="delete-button" onClick={() => removeListing(selected)}><Trash2 size={16}/> Excluir anúncio</button></div>}
         <div className="proposal-box"><h3>Gostou deste veículo?</h3><p>Envie uma mensagem diretamente ao anunciante. Ela será encaminhada por e-mail.</p><input type="email" value={proposalEmail} onChange={e => setProposalEmail(e.target.value)} placeholder="Seu e-mail de contato"/><textarea value={proposal} onChange={e => setProposal(e.target.value)} placeholder="Escreva sua mensagem ou proposta..." rows="4"/><button className="primary full" disabled={busy} onClick={sendProposal}><Mail size={17}/> {busy ? 'Enviando...' : 'Enviar mensagem ao anunciante'}</button></div>
       </div>
@@ -960,13 +992,13 @@ function App() {
         <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editCampaign(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
-      {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small><small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
+      {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small>{listingYears(item) && <small>{listingYears(item)}</small>}<small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
       {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Total de carregamentos da página desde a ativação do contador, incluindo atualizações (F5). Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
 
       {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
-      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
-      {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
+      {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
+      {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} placeholder="Ex.: 129.900,00"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
     {notice && <div className="toast" role="status">{notice}<button onClick={() => setNotice('')}><X size={16}/></button></div>}
   </div>

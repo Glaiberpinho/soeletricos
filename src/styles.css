@@ -273,3 +273,11 @@ img, picture, video { max-width: 100%; }
 }
 .location-suggestions button:hover, .location-suggestions button:focus-visible { background: #edf6ef; }
 @media(max-width: 380px) { .listing-location-fields { grid-template-columns: 1fr; } }
+
+/* Ano de fabricação e ano do modelo: responsivo e sem alterar os banners */
+.listing-years { margin: 4px 0 14px; }
+.listing-years > div { min-width: 0; }
+.listing-years label { display: block; font-size: 11px; font-weight: 700; color: #52675a; margin: 14px 0 6px; }
+.listing-years select { width: 100%; min-width: 0; }
+.listing-year-info { display: block; color: #596f61; font-size: 11px; font-weight: 600; margin-top: 5px; }
+.detail-year-info { color: #536b5c; font-size: 13px; font-weight: 700; margin: 6px 0 10px; }
