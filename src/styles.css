@@ -308,3 +308,27 @@ img, picture, video { max-width: 100%; }
   .detail-title-row { gap: 6px; }
   .detail-title-row h2 { font-size: 20px; }
 }
+
+/* E-mail da conta acima de Sair, inclusive na navegação móvel. */
+.header nav .nav-account {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+.header nav .nav-account-email {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c2d6cb;
+  font-size: 11px;
+  line-height: 1.2;
+}
+@media (max-width: 760px) {
+  .header nav .nav-account-email { max-width: 190px; font-size: 10px; }
+}

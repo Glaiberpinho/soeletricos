@@ -951,7 +951,10 @@ function App() {
         {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {user && <button className="nav-link" onClick={() => setModal('password')}>Alterar senha</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setModal('stats'); loadStats() }}>Estatísticas</button>}
-        {user && <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>}
+        {user && <div className="nav-account">
+          {user.email && <span className="nav-account-email" title={user.email}>{user.email}</span>}
+          <button className="nav-link muted" onClick={logout}><LogOut size={16}/> Sair</button>
+        </div>}
       </nav>
     </header>
     </div>
