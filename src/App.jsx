@@ -4,7 +4,7 @@ import {
   X, Mail, Upload, Zap, MapPin, Trash2, ArrowLeft, Pencil, ImagePlus
 } from 'lucide-react'
 import { auth, db, firebaseReady } from './firebase'
-import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
+import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, sendEmailVerification, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
 import { addDoc, collection, getDoc, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
 
 const PAGE_SIZE = 18
@@ -246,6 +246,7 @@ function App() {
   const [firebaseUser, setFirebaseUser] = useState(null)
   const [authLoaded, setAuthLoaded] = useState(false)
   const isAdmin = firebaseUser?.uid === ADMIN_UID
+  const needsEmailVerification = Boolean(user && !isAdmin && !firebaseUser?.emailVerified)
   const [listings, setListings] = useState([])
   const [listingsLoading, setListingsLoading] = useState(false)
   const [shown, setShown] = useState([])
@@ -310,6 +311,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [verificationSending, setVerificationSending] = useState(false)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
@@ -712,6 +714,42 @@ function App() {
   const pages = Math.max(1, Math.ceil(resultTotal / PAGE_SIZE))
   function doSearch(value) { setSearch(value); setPage(1) }
 
+  async function resendVerification() {
+    const current = auth.currentUser
+    if (!current || current.isAnonymous || current.uid === ADMIN_UID || current.emailVerified) return
+    setVerificationSending(true)
+    try {
+      auth.languageCode = 'pt-BR'
+      await sendEmailVerification(current)
+      setNotice('Enviamos um novo link de confirmação. Confira sua caixa de entrada e a pasta de spam.')
+    } catch (error) {
+      console.error('Erro ao reenviar confirmação:', error)
+      setNotice(error.code === 'auth/too-many-requests'
+        ? 'Muitas solicitações de confirmação. Tente novamente mais tarde.'
+        : 'Não foi possível reenviar o e-mail de confirmação. Tente novamente mais tarde.')
+    } finally { setVerificationSending(false) }
+  }
+
+  async function checkEmailVerification() {
+    const current = auth.currentUser
+    if (!current || current.isAnonymous) return setNotice('Entre na sua conta para confirmar o e-mail.')
+    setVerificationSending(true)
+    try {
+      await current.reload()
+      await current.getIdToken(true)
+      setFirebaseUser({ ...current, uid: current.uid, email: current.email, emailVerified: current.emailVerified, isAnonymous: current.isAnonymous })
+      if (current.emailVerified || current.uid === ADMIN_UID) {
+        setModal('')
+        setNotice('E-mail confirmado! Sua conta está liberada para publicar anúncios.')
+      } else {
+        setNotice('Seu e-mail ainda não foi confirmado. Abra o link recebido e tente novamente.')
+      }
+    } catch (error) {
+      console.error('Erro ao consultar confirmação:', error)
+      setNotice('Não foi possível verificar a confirmação agora. Tente novamente.')
+    } finally { setVerificationSending(false) }
+  }
+
   async function register() {
     if (!email.trim() && !password) return setNotice('preencha e-mail e senha e clique criar conta')
     if (email.trim() && !password) return setNotice('preencha a senha e clique novamente em criar conta')
@@ -719,9 +757,19 @@ function App() {
     if (password.length < 6) return setNotice('A senha precisa ter pelo menos 6 caracteres.')
     setBusy(true)
     try {
-      await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
-      setModal(''); setEmail(''); setPassword('')
-      setNotice('Conta criada no Firebase! Seus anúncios estarão disponíveis em qualquer navegador.')
+      const credential = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
+      auth.languageCode = 'pt-BR'
+      let emailSent = false
+      try {
+        await sendEmailVerification(credential.user)
+        emailSent = true
+      } catch (verificationError) {
+        console.error('Conta criada, mas envio de confirmação falhou:', verificationError)
+      }
+      setModal('verifyEmail'); setEmail(''); setPassword('')
+      setNotice(emailSent
+        ? 'Conta criada! Enviamos um link de confirmação para seu e-mail. Confirme antes de publicar.'
+        : 'Conta criada, mas não foi possível enviar a confirmação. Use Reenviar confirmação para tentar novamente.')
     } catch (error) {
       console.error(error)
       setNotice(error.code === 'auth/email-already-in-use' ? 'Este e-mail já está cadastrado. Faça login.' : `Não foi possível criar a conta: ${error.message}`)
@@ -732,9 +780,15 @@ function App() {
     if (!email.trim() || !password) return setNotice('Informe seu e-mail e sua senha.')
     setBusy(true)
     try {
-      await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
-      setModal(''); setEmail(''); setPassword('')
-      setNotice('Login realizado! Seus anúncios estão vinculados à sua conta Firebase.')
+      const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
+      await credential.user.reload()
+      await credential.user.getIdToken(true)
+      setFirebaseUser({ ...credential.user, uid: credential.user.uid, email: credential.user.email, emailVerified: credential.user.emailVerified, isAnonymous: credential.user.isAnonymous })
+      setModal(credential.user.uid !== ADMIN_UID && !credential.user.emailVerified ? 'verifyEmail' : '')
+      setEmail(''); setPassword('')
+      setNotice(credential.user.uid !== ADMIN_UID && !credential.user.emailVerified
+        ? 'Confirme seu e-mail para publicar anúncios. Caso não encontre a mensagem, solicite um novo link.'
+        : 'Login realizado! Seus anúncios estão vinculados à sua conta Firebase.')
     } catch (error) {
       console.error(error)
       setNotice('Não foi possível entrar. Confira o e-mail e a senha da conta Firebase.')
@@ -748,6 +802,7 @@ function App() {
 
   async function publish() {
     if (!user || !firebaseUser || firebaseUser.isAnonymous) return setNotice('Entre ou crie uma conta com e-mail e senha para publicar anúncios.')
+    if (needsEmailVerification) { setModal('verifyEmail'); return setNotice('Confirme seu e-mail antes de publicar anúncios.') }
     if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
@@ -762,6 +817,9 @@ function App() {
     try {
       const currentFirebaseUser = auth.currentUser
       if (!currentFirebaseUser || currentFirebaseUser.isAnonymous || currentFirebaseUser.uid !== user.uid) throw new Error('Entre com e-mail e senha para publicar.')
+      await currentFirebaseUser.reload()
+      await currentFirebaseUser.getIdToken(true)
+      if (currentFirebaseUser.uid !== ADMIN_UID && !currentFirebaseUser.emailVerified) throw new Error('Confirme seu e-mail antes de publicar.')
       const photoUrls = []
       for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
       const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
@@ -832,6 +890,7 @@ function App() {
   }
 
   async function saveListingChanges() {
+    if (needsEmailVerification) { setModal('verifyEmail'); return setNotice('Confirme seu e-mail antes de editar anúncios.') }
     if (!editingListing || editingListing.ownerUid !== firebaseUser?.uid) return setNotice('Você não tem permissão para editar este anúncio.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
@@ -843,6 +902,9 @@ function App() {
     if (description.trim().length > 5000) return setNotice('A descrição deve ter no máximo 5.000 caracteres.')
     setBusy(true)
     try {
+      await auth.currentUser.reload()
+      await auth.currentUser.getIdToken(true)
+      if (auth.currentUser.uid !== ADMIN_UID && !auth.currentUser.emailVerified) throw new Error('Confirme seu e-mail antes de editar anúncios.')
       const photoUrls = []
       for (const photo of photos.filter(Boolean)) photoUrls.push(typeof photo === 'string' ? photo : await compressImage(photo))
       const totalPhotoBytes = photoUrls.reduce((total, photo) => total + photo.length, 0)
@@ -962,7 +1024,8 @@ function App() {
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings'); loadListings() }}>Administrar anúncios</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); resetCampaignForm(); setModal('campaigns') }}>Publicidade</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings'); loadListings() }}>Meus Anúncios</button>}
-        {user ? <button className="nav-link" onClick={() => { setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+        {user ? <button className="nav-link" onClick={() => { if (needsEmailVerification) { setModal('verifyEmail'); return } setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
+        {needsEmailVerification && <button className="nav-link" onClick={() => setModal('verifyEmail')}>Confirmar e-mail</button>}
         {user && <button className="nav-link" onClick={() => setModal('password')}>Alterar senha</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setModal('stats'); loadStats() }}>Estatísticas</button>}
         {user && <div className="nav-account">
@@ -1017,6 +1080,15 @@ function App() {
       {modal === 'stats' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Estatísticas de visitas</h2><p className="form-help">Total de carregamentos da página desde a ativação do contador, incluindo atualizações (F5). Não são visitantes únicos nem números auditados.</p><h3>Total acumulado: {stats.toLocaleString('pt-BR')}</h3><button className="secondary full" onClick={loadStats} disabled={statsLoading}>{statsLoading ? 'Carregando...' : 'Atualizar total'}</button></>}
 
       {modal === 'password' && user && <><span className="eyebrow dark">MINHA CONTA</span><h2>Alterar senha</h2><label>Senha atual</label><input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><label>Nova senha</label><input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}/><button className="primary full" disabled={busy} onClick={changePassword}>Salvar nova senha</button></>}
+      {modal === 'verifyEmail' && user && <>
+        <span className="eyebrow dark">SEGURANÇA DA CONTA</span>
+        <h2>Confirme seu e-mail</h2>
+        <p className="form-help">Para anunciar no Só Elétricos, confirme que você tem acesso ao endereço <strong>{user.email}</strong>. Abra o link enviado pelo Firebase e depois volte aqui.</p>
+        <p className="form-help">Verifique também a pasta de spam ou lixo eletrônico. Os anúncios existentes não serão apagados.</p>
+        <button className="primary full" disabled={verificationSending} onClick={checkEmailVerification}>{verificationSending ? 'Verificando...' : 'Já confirmei meu e-mail'}</button>
+        <button className="secondary full" disabled={verificationSending} onClick={resendVerification}>{verificationSending ? 'Aguarde...' : 'Reenviar e-mail de confirmação'}</button>
+        <button className="secondary full" onClick={logout}>Sair da conta</button>
+      </>}
       {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
       {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
       {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
