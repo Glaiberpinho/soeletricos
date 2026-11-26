@@ -295,6 +295,58 @@ function CampaignLocationFields({ state, setState, city, setCity }) {
   </>
 }
 
+// Vídeo promocional independente dos banners já existentes.
+function PromotionalVideo({ campaign, onClose }) {
+  const videoRef = useRef(null)
+  const [muted, setMuted] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [blocked, setBlocked] = useState(false)
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    let valid = true
+    video.muted = false
+    const tryPlay = async () => {
+      try {
+        await video.play()
+        if (valid) { setMuted(false); setPlaying(true); setBlocked(false) }
+      } catch {
+        if (!valid) return
+        video.muted = true
+        setMuted(true)
+        try {
+          await video.play()
+          if (valid) { setPlaying(true); setBlocked(false) }
+        } catch { if (valid) { setPlaying(false); setBlocked(true) } }
+      }
+    }
+    tryPlay()
+    return () => { valid = false; video.pause() }
+  }, [campaign.id])
+  async function enableAudio() {
+    const video = videoRef.current
+    if (!video) return
+    video.muted = false
+    try {
+      await video.play()
+      setMuted(false); setPlaying(true); setBlocked(false)
+    } catch {
+      video.muted = true
+      setMuted(true)
+      setBlocked(true)
+    }
+  }
+  return <aside className="promo-video-float" aria-label="Vídeo promocional do Só Elétricos">
+    <button type="button" className="promo-video-close" aria-label="Fechar vídeo promocional" onClick={onClose}><X size={19}/></button>
+    <div className="promo-video-phone">
+      <video ref={videoRef} src={campaign.videoUrl} playsInline preload="metadata" controls
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+        onError={() => setBlocked(true)} onEnded={onClose} />
+    </div>
+    {(muted || blocked) && <button type="button" className="promo-video-sound" onClick={enableAudio}>{blocked && !playing ? '▶ Reproduzir com som' : '🔊 Ativar som'}</button>}
+  </aside>
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [firebaseUser, setFirebaseUser] = useState(null)
@@ -321,6 +373,19 @@ function App() {
   const pageCursors = useRef({ key: "", cursors: [] })
 
   const [visitorPlace, setVisitorPlace] = useState(null)
+  const [promoVideos, setPromoVideos] = useState([])
+  const [promoLoaded, setPromoLoaded] = useState(false)
+  const [visitorPlaceReady, setVisitorPlaceReady] = useState(false)
+  const [promoClosed, setPromoClosed] = useState(() => {
+    try { return sessionStorage.getItem('soeletricosPromoSeenV1') === '1' } catch { return false }
+  })
+  const [promoName, setPromoName] = useState('')
+  const [promoState, setPromoState] = useState('')
+  const [promoCity, setPromoCity] = useState('')
+  const [promoUrl, setPromoUrl] = useState('')
+  const [promoStart, setPromoStart] = useState('')
+  const [promoEnd, setPromoEnd] = useState('')
+  const [editingPromoId, setEditingPromoId] = useState(null)
   const [campaigns, setCampaigns] = useState([])
   const [campaignName, setCampaignName] = useState('')
   const [campaignCity, setCampaignCity] = useState('')
@@ -428,7 +493,7 @@ function App() {
         }
       } catch (error) {
         if (active) console.warn('Não foi possível identificar a cidade por IP:', error)
-      }
+      } finally { if (active) setVisitorPlaceReady(true) }
     }
 
     async function locateByDevice(position) {
@@ -447,6 +512,7 @@ function App() {
         const city = String(data.city || data.locality || '').trim()
         if (!active || data.countryCode !== 'BR' || !/^[A-Z]{2}$/.test(state) || !city) return false
         setVisitorPlace({ city, state })
+        setVisitorPlaceReady(true)
         return true
       } catch (error) {
         if (active) console.warn('Não foi possível identificar a cidade pelas coordenadas:', error)
@@ -478,6 +544,16 @@ function App() {
     getDocs(collection(db, 'campaigns'))
       .then(snapshot => setCampaigns(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))))
       .catch(error => console.warn('Publicidade indisponível:', error))
+  }, [])
+
+  useEffect(() => {
+    if (!firebaseReady) { setPromoLoaded(true); return }
+    let active = true
+    getDocs(collection(db, 'videoCampaigns'))
+      .then(snapshot => { if (active) setPromoVideos(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))) })
+      .catch(error => console.warn('Vídeos promocionais indisponíveis:', error))
+      .finally(() => { if (active) setPromoLoaded(true) })
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
@@ -661,6 +737,88 @@ function App() {
         normalizePlace(c.city) === 'todas' && c.state === 'BR')
     })
   }, [campaigns, visitorPlace])
+
+  const activePromoVideo = useMemo(() => {
+    if (!promoLoaded || !visitorPlaceReady || promoClosed) return null
+    const now = Date.now()
+    const available = promoVideos.filter(c => c.active === true
+      && (!c.startDate || new Date(c.startDate + 'T00:00:00').getTime() <= now)
+      && (!c.endDate || new Date(c.endDate + 'T23:59:59').getTime() >= now))
+    const local = visitorPlace ? available.filter(c =>
+      normalizePlace(c.city) === normalizePlace(visitorPlace.city)
+      && normalizePlace(c.state) === normalizePlace(visitorPlace.state)) : []
+    const national = available.filter(c => c.state === 'BR' && normalizePlace(c.city) === 'todas')
+    return (local.length ? local : national)[0] || null
+  }, [promoVideos, visitorPlace, visitorPlaceReady, promoClosed, promoLoaded])
+
+  function dismissPromoVideo() {
+    setPromoClosed(true)
+    try { sessionStorage.setItem('soeletricosPromoSeenV1', '1') } catch { /* navegadores restritivos */ }
+  }
+
+  function resetPromoForm() {
+    setEditingPromoId(null); setPromoName(''); setPromoState(''); setPromoCity('')
+    setPromoUrl(''); setPromoStart(''); setPromoEnd('')
+  }
+  function editPromoVideo(c) {
+    setEditingPromoId(c.id)
+    setPromoName(c.name || '')
+    const national = c.state === 'BR' && normalizePlace(c.city) === 'todas'
+    setPromoState(national ? '' : (c.state || ''))
+    setPromoCity(national ? '' : (c.city || ''))
+    setPromoUrl(c.videoUrl || '')
+    setPromoStart(c.startDate || '')
+    setPromoEnd(c.endDate || '')
+  }
+  async function savePromoVideo() {
+    if (!isAdmin || busy) return
+    const name = promoName.trim()
+    const state = promoState.trim().toUpperCase()
+    const city = promoCity.trim()
+    const national = !state && !city
+    if (!name || name.length > 120) return setNotice('Informe o nome do vídeo promocional (até 120 caracteres).')
+    if (!national && (!/^[A-Z]{2}$/.test(state) || !city)) return setNotice('Selecione UF e cidade, ou deixe os dois vazios para todo o Brasil.')
+    let videoUrl
+    try {
+      const url = new URL(promoUrl.trim())
+      if (url.protocol !== 'https:' || !/\.mp4(?:$|[?#])/i.test(url.href) || url.href.length > 2048) throw Error('URL inválida')
+      videoUrl = url.href
+    } catch { return setNotice('Informe o endereço HTTPS direto de um vídeo MP4 publicado no site.') }
+    if (promoStart && promoEnd && promoEnd < promoStart) return setNotice('A data final não pode ser anterior à inicial.')
+    const data = { name, state: national ? 'BR' : state, city: national ? 'Todas' : city, videoUrl, startDate: promoStart, endDate: promoEnd }
+    setBusy(true)
+    try {
+      if (editingPromoId) {
+        await updateDoc(doc(db, 'videoCampaigns', editingPromoId), data)
+        setPromoVideos(old => old.map(c => c.id === editingPromoId ? { ...c, ...data } : c))
+        setNotice('Vídeo promocional atualizado.')
+      } else {
+        const newData = { ...data, active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
+        const ref = await addDoc(collection(db, 'videoCampaigns'), newData)
+        setPromoVideos(old => [...old, { ...newData, id: ref.id }])
+        setNotice('Vídeo promocional cadastrado.')
+      }
+      resetPromoForm()
+    } catch (error) { console.error(error); setNotice('Não foi possível salvar o vídeo. Confira as regras da coleção videoCampaigns.') }
+    finally { setBusy(false) }
+  }
+  async function changePromoVideo(c, active) {
+    if (!isAdmin || busy) return
+    if (active === null && !confirm('Excluir este vídeo promocional?')) return
+    setBusy(true)
+    try {
+      if (active === null) {
+        await deleteDoc(doc(db, 'videoCampaigns', c.id))
+        setPromoVideos(old => old.filter(v => v.id !== c.id))
+        if (editingPromoId === c.id) resetPromoForm()
+      } else {
+        await updateDoc(doc(db, 'videoCampaigns', c.id), { active })
+        setPromoVideos(old => old.map(v => v.id === c.id ? { ...v, active } : v))
+      }
+      setNotice('Vídeo promocional atualizado.')
+    } catch (error) { console.error(error); setNotice('Não foi possível alterar o vídeo promocional.') }
+    finally { setBusy(false) }
+  }
 
   function resetCampaignForm() {
     setEditingCampaignId(null)
@@ -1149,6 +1307,7 @@ function App() {
       <nav>
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); setModal('adminListings'); loadListings() }}>Administrar anúncios</button>}
         {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); resetCampaignForm(); setModal('campaigns') }}>Publicidade</button>}
+        {isAdmin && <button className="nav-link" onClick={() => { setSelected(null); resetPromoForm(); setModal('promoVideos') }}>Vídeo promocional</button>}
         {user && <button className="nav-link" onClick={() => { setSelected(null); setModal('myListings'); loadListings() }}>Meus Anúncios</button>}
         {user ? <button className="nav-link" onClick={() => { if (needsEmailVerification) { setModal('verifyEmail'); return } setEditingListing(null); setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('publish') }}><Plus size={16}/> Anunciar</button> : <button className="nav-link" onClick={() => setModal('auth')}><UserRound size={16}/> Entrar</button>}
         {needsEmailVerification && <button className="nav-link" onClick={() => setModal('verifyEmail')}>Confirmar e-mail</button>}
@@ -1161,6 +1320,7 @@ function App() {
       </nav>
     </header>
     </div>
+    {activePromoVideo && <PromotionalVideo key={activePromoVideo.id} campaign={activePromoVideo} onClose={dismissPromoVideo}/>}
     <div className="sticky-horizontal-ad">
       <CampaignSlot campaigns={localCampaigns} position="horizontal"/>
     </div>
@@ -1200,6 +1360,18 @@ function App() {
         <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={campaignStart} onChange={e => setCampaignStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={campaignEnd} onChange={e => setCampaignEnd(e.target.value)}/></div></div>
         <button className="primary full" disabled={busy} onClick={saveCampaign}>{busy ? 'Salvando...' : editingCampaignId ? 'Salvar alterações da publicidade' : 'Cadastrar publicidade'}</button>{editingCampaignId && <button type="button" className="secondary full" disabled={busy} onClick={resetCampaignForm}>Cancelar edição</button>}
         <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.state === 'BR' && normalizePlace(c.city) === 'todas' ? 'Todas as cidades - Todos os estados' : `${c.city} - ${c.state}`} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editCampaign(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
+      </>}
+      {modal === 'promoVideos' && isAdmin && <>
+        <span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Vídeo promocional flutuante</h2>
+        <p className="form-help">O vídeo aparece uma vez por aba/visita, em tamanho reduzido no celular. Campanhas locais têm prioridade; sem campanha local, aparece a nacional. O navegador pode bloquear a reprodução automática com som — nesse caso o visitante verá o botão de ativação.</p>
+        <label>Nome da campanha</label><input value={promoName} maxLength={120} onChange={e => setPromoName(e.target.value)} placeholder="Ex.: Apresentação Só Elétricos"/>
+        <CampaignLocationFields state={promoState} setState={setPromoState} city={promoCity} setCity={setPromoCity}/>
+        <label>Link HTTPS direto do vídeo MP4</label><input type="url" value={promoUrl} onChange={e => setPromoUrl(e.target.value)} placeholder="https://www.soeletricosbrasil.com.br/videos/promocional.mp4"/>
+        <p className="form-help">Hospede um MP4 comprimido em public/videos no GitHub. O Firebase armazenará somente o endereço, não o vídeo.</p>
+        <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={promoStart} onChange={e => setPromoStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={promoEnd} onChange={e => setPromoEnd(e.target.value)}/></div></div>
+        <button className="primary full" disabled={busy} onClick={savePromoVideo}>{busy ? 'Salvando...' : editingPromoId ? 'Salvar alterações do vídeo' : 'Cadastrar vídeo promocional'}</button>
+        {editingPromoId && <button type="button" className="secondary full" disabled={busy} onClick={resetPromoForm}>Cancelar edição</button>}
+        <h3>Vídeos cadastrados</h3><div className="my-listings">{promoVideos.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.state === 'BR' && normalizePlace(c.city) === 'todas' ? 'Todo o Brasil' : `${c.city} - ${c.state}`} · {c.active ? 'Ativo' : 'Pausado'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editPromoVideo(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changePromoVideo(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changePromoVideo(c, null)}>Excluir</button></div>)}</div>
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small>{listingYears(item) && <small>{listingYears(item)}</small>}<small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}

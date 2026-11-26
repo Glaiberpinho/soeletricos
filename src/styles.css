@@ -374,3 +374,12 @@ img, picture, video { max-width: 100%; }
   }
   .form-modal > button.close { margin-top: -13px; margin-right: -7px; }
 }
+
+/* Vídeo promocional independente da publicidade existente. */
+.promo-video-float { position: fixed; right: 22px; bottom: 18px; z-index: 9; width: min(230px, 28vw); padding: 11px 8px 8px; background: #102b24; border: 3px solid #253c32; border-radius: 26px; box-shadow: 0 16px 42px #0006; }
+.promo-video-phone { border-radius: 17px; overflow: hidden; background: #000; }
+.promo-video-phone video { display: block; width: 100%; aspect-ratio: 9 / 16; object-fit: contain; background: #000; }
+.promo-video-close { position: absolute; top: -13px; right: -13px; z-index: 2; display: grid; place-items: center; width: 36px; height: 36px; border: 2px solid #fff; border-radius: 50%; background: #183b2c; color: #fff; cursor: pointer; }
+.promo-video-sound { width: 100%; margin-top: 7px; border: 0; border-radius: 9px; background: #f2bd52; color: #1b2a22; font-weight: 800; padding: 9px 5px; cursor: pointer; font-size: 12px; }
+@media (max-width: 760px) { .promo-video-float { width: min(36vw, 155px); right: 10px; bottom: 12px; border-radius: 20px; padding: 7px 5px 5px; } .promo-video-phone { border-radius: 13px; } .promo-video-close { width: 32px; height: 32px; top: -11px; right: -8px; } .promo-video-sound { font-size: 10px; padding: 7px 3px; } }
+@media (orientation: landscape) and (max-height: 500px) { .promo-video-float { width: min(19vw, 108px); bottom: 6px; } }
