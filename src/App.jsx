@@ -241,6 +241,60 @@ function ListingLocationFields(props) {
   return touchDevice ? <MobileListingLocationFields {...props} /> : <DesktopListingLocationFields {...props} />
 }
 
+
+// Exclusivo da administração de publicidades: UF primeiro e cidade pesquisável.
+// Campos em branco significam campanha nacional; o salvamento converte para
+// BR / Todas, formato já aceito pelas regras atuais do Firestore.
+function CampaignLocationFields({ state, setState, city, setCity }) {
+  const [cities, setCities] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState(false)
+  const timer = useRef(null)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => {
+    if (!state) { setCities([]); setLoading(false); setError(false); return }
+    const controller = new AbortController()
+    setCities([])
+    setLoading(true)
+    setError(false)
+    fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${state}/municipios?orderBy=nome`, { signal: controller.signal })
+      .then(r => { if (!r.ok) throw new Error('IBGE indisponível'); return r.json() })
+      .then(data => { if (!controller.signal.aborted) setCities(data) })
+      .catch(e => { if (e.name !== 'AbortError' && !controller.signal.aborted) setError(true) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [state])
+  const matches = cities.filter(item => normalizePlace(item.nome).includes(normalizePlace(city))).slice(0, 35)
+  return <>
+    <div className="two-fields">
+      <div>
+        <label htmlFor="campaign-state">Estado (UF)</label>
+        <select id="campaign-state" value={state} onChange={e => { setState(e.target.value); setCity(''); setOpen(false) }}>
+          <option value="">Selecione o estado (opcional)</option>
+          {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => <option key={uf} value={uf}>{uf}</option>)}
+        </select>
+      </div>
+      <div className="location-suggest-field">
+        <label htmlFor="campaign-city">Cidade</label>
+        <input id="campaign-city" type="text" autoComplete="off" value={city} disabled={!state || loading}
+          placeholder={!state ? 'Selecione a UF ou deixe vazio' : loading ? 'Carregando cidades...' : 'Digite para escolher a cidade'}
+          onFocus={() => { clearTimeout(timer.current); setOpen(true) }}
+          onBlur={() => { timer.current = setTimeout(() => setOpen(false), 200) }}
+          onChange={e => { setCity(e.target.value); setOpen(true) }}
+          role="combobox" aria-autocomplete="list" aria-expanded={open && matches.length > 0}
+          aria-controls="campaign-city-suggestions" />
+        {open && !loading && matches.length > 0 && <div id="campaign-city-suggestions" className="location-suggestions" role="listbox">
+          {matches.map(item => <button key={item.id} type="button" role="option" aria-selected={normalizePlace(city) === normalizePlace(item.nome)}
+            onMouseDown={e => e.preventDefault()} onClick={() => { setCity(item.nome); setOpen(false) }}>{item.nome}</button>)}
+        </div>}
+      </div>
+    </div>
+    <p className="form-help">Para exibir em todo o Brasil onde não houver publicidade local, deixe <strong>Estado e Cidade vazios</strong>.</p>
+    {error && <p className="form-help">Não foi possível carregar as cidades. Selecione novamente o estado ou tente mais tarde.</p>}
+  </>
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [firebaseUser, setFirebaseUser] = useState(null)
@@ -561,8 +615,9 @@ function App() {
   function editCampaign(c) {
     setEditingCampaignId(c.id)
     setCampaignName(c.name || '')
-    setCampaignCity(c.city || '')
-    setCampaignState(c.state || '')
+    const nationwide = c.state === 'BR' && normalizePlace(c.city) === 'todas'
+    setCampaignCity(nationwide ? '' : (c.city || ''))
+    setCampaignState(nationwide ? '' : (c.state || ''))
     setCampaignPosition(c.position || 'horizontal')
     setCampaignImage(c.imageUrl || '')
     setCampaignMobileImage(c.mobileImageUrl || '')
@@ -574,7 +629,11 @@ function App() {
 
   async function saveCampaign() {
     if (!isAdmin || busy) return
-    const name = campaignName.trim(), city = campaignCity.trim(), state = campaignState.trim().toUpperCase()
+    const name = campaignName.trim(), enteredCity = campaignCity.trim(), enteredState = campaignState.trim().toUpperCase()
+    // Nacional: dois campos vazios na interface; BR/Todas apenas no Firestore.
+    const nationwide = !enteredCity && !enteredState
+    const city = nationwide ? 'Todas' : enteredCity
+    const state = nationwide ? 'BR' : enteredState
     let imageUrl, destinationUrl, mobileImageUrl
     try {
       imageUrl = new URL(campaignImage.trim())
@@ -585,8 +644,8 @@ function App() {
         if (mobileImageUrl.protocol !== 'https:') throw Error('HTTPS obrigatório')
       }
     } catch { return setNotice('Informe links HTTPS válidos para a imagem/GIF e o destino.') }
-    if (!name || !city || !/^[A-Z]{2}$/.test(state)) return setNotice('Informe anunciante, cidade e UF com duas letras.')
-    if ((state === 'BR') !== (normalizePlace(city) === 'todas')) return setNotice('Para publicidade nacional, selecione Todos os estados e Todas as cidades juntos.')
+    if (!name) return setNotice('Informe o anunciante.')
+    if (!nationwide && (!/^[A-Z]{2}$/.test(enteredState) || !enteredCity)) return setNotice('Para campanha local, selecione o estado e a cidade. Para publicidade nacional, deixe ambos vazios.')
     if (campaignStart && campaignEnd && campaignEnd < campaignStart) return setNotice('A data final não pode ser anterior à inicial.')
     setBusy(true)
     try {
@@ -1076,24 +1135,7 @@ function App() {
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
       {modal === 'campaigns' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Gerenciar publicidade local</h2><p className="form-help">Cadastre imagens ou GIFs hospedados em um endereço HTTPS público. A cidade é identificada aproximadamente pelo IP do visitante, sem solicitar GPS. A imagem deve estar publicada, por exemplo, na pasta public/banners do GitHub Pages.</p>
         <label>Anunciante</label><input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Nome da empresa" maxLength={120}/>
-        <div className="two-fields">
-          <div>
-            <label>Cidade</label>
-            <select value={normalizePlace(campaignCity) === 'todas' ? 'all' : 'specific'} onChange={e => setCampaignCity(e.target.value === 'all' ? 'Todas' : '')}>
-              <option value="specific">Cidade específica</option>
-              <option value="all">Todas as cidades</option>
-            </select>
-            {normalizePlace(campaignCity) !== 'todas' && <input value={campaignCity} onChange={e => setCampaignCity(e.target.value)} placeholder="Belo Horizonte" aria-label="Nome da cidade"/>}
-          </div>
-          <div>
-            <label>Estado (UF)</label>
-            <select value={campaignState} onChange={e => setCampaignState(e.target.value)}>
-              <option value="">Selecione o estado</option>
-              <option value="BR">Todos os estados</option>
-              {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => <option key={uf} value={uf}>{uf}</option>)}
-            </select>
-          </div>
-        </div>
+        <CampaignLocationFields state={campaignState} setState={setCampaignState} city={campaignCity} setCity={setCampaignCity} />
         <label>Espaço publicitário</label><select value={campaignPosition} onChange={e => setCampaignPosition(e.target.value)}><option value="horizontal">Horizontal superior</option><option value="left">Lateral esquerda</option><option value="right">Lateral direita</option></select>
         <label>Imagem ou GIF para computador (HTTPS)</label><input value={campaignImage} onChange={e => setCampaignImage(e.target.value)} placeholder="https://.../banners/empresa-pc.jpg"/>
         <label>Imagem ou GIF para celular (HTTPS, opcional)</label><input value={campaignMobileImage} onChange={e => setCampaignMobileImage(e.target.value)} placeholder="https://.../banners/empresa-celular.jpg"/>
