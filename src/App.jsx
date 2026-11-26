@@ -301,6 +301,7 @@ function PromotionalVideo({ campaign, onClose }) {
   const [muted, setMuted] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [blocked, setBlocked] = useState(false)
+  const [ended, setEnded] = useState(false)
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -336,14 +337,30 @@ function PromotionalVideo({ campaign, onClose }) {
       setBlocked(true)
     }
   }
+  async function replay() {
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = 0
+    setEnded(false)
+    try {
+      await video.play()
+      setPlaying(true); setBlocked(false)
+    } catch {
+      video.muted = true
+      setMuted(true)
+      try { await video.play(); setPlaying(true); setBlocked(false) }
+      catch { setPlaying(false); setBlocked(true) }
+    }
+  }
   return <aside className="promo-video-float" aria-label="Vídeo promocional do Só Elétricos">
     <button type="button" className="promo-video-close" aria-label="Fechar vídeo promocional" onClick={onClose}><X size={19}/></button>
     <div className="promo-video-phone">
       <video ref={videoRef} src={campaign.videoUrl} playsInline preload="metadata" controls
-        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-        onError={() => setBlocked(true)} onEnded={onClose} />
+        onPlay={() => { setPlaying(true); setEnded(false) }} onPause={() => setPlaying(false)}
+        onError={() => setBlocked(true)} onEnded={() => { setEnded(true); setPlaying(false) }} />
     </div>
-    {(muted || blocked) && <button type="button" className="promo-video-sound" onClick={enableAudio}>{blocked && !playing ? '▶ Reproduzir com som' : '🔊 Ativar som'}</button>}
+    {ended ? <button type="button" className="promo-video-sound" onClick={replay}>↻ Assistir novamente</button> :
+      (muted || blocked) && <button type="button" className="promo-video-sound" onClick={enableAudio}>{blocked && !playing ? '▶ Reproduzir com som' : '🔊 Ativar som'}</button>}
   </aside>
 }
 
@@ -376,9 +393,7 @@ function App() {
   const [promoVideos, setPromoVideos] = useState([])
   const [promoLoaded, setPromoLoaded] = useState(false)
   const [visitorPlaceReady, setVisitorPlaceReady] = useState(false)
-  const [promoClosed, setPromoClosed] = useState(() => {
-    try { return sessionStorage.getItem('soeletricosPromoSeenV1') === '1' } catch { return false }
-  })
+  const [promoClosed, setPromoClosed] = useState(false)
   const [promoName, setPromoName] = useState('')
   const [promoState, setPromoState] = useState('')
   const [promoCity, setPromoCity] = useState('')
@@ -753,7 +768,6 @@ function App() {
 
   function dismissPromoVideo() {
     setPromoClosed(true)
-    try { sessionStorage.setItem('soeletricosPromoSeenV1', '1') } catch { /* navegadores restritivos */ }
   }
 
   function resetPromoForm() {
