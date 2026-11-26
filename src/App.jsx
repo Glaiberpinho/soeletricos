@@ -532,14 +532,23 @@ function App() {
     finally { setBusy(false) }
   }
 
+  // Em cada espaço, campanhas da cidade do visitante têm prioridade.
+  // Quando não há campanha local ativa e dentro do prazo, usa a campanha nacional.
+  // O código interno BR + Todas mantém compatibilidade com as regras já publicadas
+  // no Firestore (state de dois caracteres e city não vazia).
   const localCampaigns = useMemo(() => {
-    if (!visitorPlace) return []
     const now = Date.now()
-    return campaigns.filter(c => c.active === true
-      && normalizePlace(c.city) === normalizePlace(visitorPlace.city)
-      && normalizePlace(c.state) === normalizePlace(visitorPlace.state)
+    const available = campaigns.filter(c => c.active === true
       && (!c.startDate || new Date(c.startDate + 'T00:00:00').getTime() <= now)
       && (!c.endDate || new Date(c.endDate + 'T23:59:59').getTime() >= now))
+    return ['horizontal', 'left', 'right'].flatMap(position => {
+      const inPosition = available.filter(c => c.position === position)
+      const local = visitorPlace ? inPosition.filter(c =>
+        normalizePlace(c.city) === normalizePlace(visitorPlace.city)
+        && normalizePlace(c.state) === normalizePlace(visitorPlace.state)) : []
+      return local.length ? local : inPosition.filter(c =>
+        normalizePlace(c.city) === 'todas' && c.state === 'BR')
+    })
   }, [campaigns, visitorPlace])
 
   function resetCampaignForm() {
@@ -577,6 +586,7 @@ function App() {
       }
     } catch { return setNotice('Informe links HTTPS válidos para a imagem/GIF e o destino.') }
     if (!name || !city || !/^[A-Z]{2}$/.test(state)) return setNotice('Informe anunciante, cidade e UF com duas letras.')
+    if ((state === 'BR') !== (normalizePlace(city) === 'todas')) return setNotice('Para publicidade nacional, selecione Todos os estados e Todas as cidades juntos.')
     if (campaignStart && campaignEnd && campaignEnd < campaignStart) return setNotice('A data final não pode ser anterior à inicial.')
     setBusy(true)
     try {
@@ -1066,14 +1076,31 @@ function App() {
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
       {modal === 'campaigns' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Gerenciar publicidade local</h2><p className="form-help">Cadastre imagens ou GIFs hospedados em um endereço HTTPS público. A cidade é identificada aproximadamente pelo IP do visitante, sem solicitar GPS. A imagem deve estar publicada, por exemplo, na pasta public/banners do GitHub Pages.</p>
         <label>Anunciante</label><input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Nome da empresa" maxLength={120}/>
-        <div className="two-fields"><div><label>Cidade</label><input value={campaignCity} onChange={e => setCampaignCity(e.target.value)} placeholder="Belo Horizonte"/></div><div><label>UF</label><input value={campaignState} onChange={e => setCampaignState(e.target.value)} placeholder="MG" maxLength={2}/></div></div>
+        <div className="two-fields">
+          <div>
+            <label>Cidade</label>
+            <select value={normalizePlace(campaignCity) === 'todas' ? 'all' : 'specific'} onChange={e => setCampaignCity(e.target.value === 'all' ? 'Todas' : '')}>
+              <option value="specific">Cidade específica</option>
+              <option value="all">Todas as cidades</option>
+            </select>
+            {normalizePlace(campaignCity) !== 'todas' && <input value={campaignCity} onChange={e => setCampaignCity(e.target.value)} placeholder="Belo Horizonte" aria-label="Nome da cidade"/>}
+          </div>
+          <div>
+            <label>Estado (UF)</label>
+            <select value={campaignState} onChange={e => setCampaignState(e.target.value)}>
+              <option value="">Selecione o estado</option>
+              <option value="BR">Todos os estados</option>
+              {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => <option key={uf} value={uf}>{uf}</option>)}
+            </select>
+          </div>
+        </div>
         <label>Espaço publicitário</label><select value={campaignPosition} onChange={e => setCampaignPosition(e.target.value)}><option value="horizontal">Horizontal superior</option><option value="left">Lateral esquerda</option><option value="right">Lateral direita</option></select>
         <label>Imagem ou GIF para computador (HTTPS)</label><input value={campaignImage} onChange={e => setCampaignImage(e.target.value)} placeholder="https://.../banners/empresa-pc.jpg"/>
         <label>Imagem ou GIF para celular (HTTPS, opcional)</label><input value={campaignMobileImage} onChange={e => setCampaignMobileImage(e.target.value)} placeholder="https://.../banners/empresa-celular.jpg"/>
         <label>Link HTTPS de destino</label><input value={campaignUrl} onChange={e => setCampaignUrl(e.target.value)} placeholder="https://www.anunciante.com.br"/>
         <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={campaignStart} onChange={e => setCampaignStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={campaignEnd} onChange={e => setCampaignEnd(e.target.value)}/></div></div>
         <button className="primary full" disabled={busy} onClick={saveCampaign}>{busy ? 'Salvando...' : editingCampaignId ? 'Salvar alterações da publicidade' : 'Cadastrar publicidade'}</button>{editingCampaignId && <button type="button" className="secondary full" disabled={busy} onClick={resetCampaignForm}>Cancelar edição</button>}
-        <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.city} - {c.state} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editCampaign(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
+        <h3>Campanhas cadastradas</h3><div className="my-listings">{campaigns.map(c => <div className="my-listing-row" key={c.id}><div className="my-listing-info"><strong>{c.name}</strong><small>{c.state === 'BR' && normalizePlace(c.city) === 'todas' ? 'Todas as cidades - Todos os estados' : `${c.city} - ${c.state}`} · {c.position} · {c.active ? 'Ativa' : 'Pausada'}</small></div><button type="button" className="edit-button" disabled={busy} onClick={() => editCampaign(c)}><Pencil size={14}/> Editar</button><button type="button" className="edit-button" disabled={busy} onClick={() => changeCampaign(c, !c.active)}>{c.active ? 'Pausar' : 'Ativar'}</button><button type="button" className="delete-button" disabled={busy} onClick={() => changeCampaign(c, null)}>Excluir</button></div>)}</div>
       </>}
       {modal === 'adminListings' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Todos os anúncios</h2><button className="secondary full" disabled={busy} onClick={indexExistingListings}>Indexar títulos dos anúncios existentes (uma vez)</button><h3>Backup dos anúncios</h3><p className="form-help">Backup completo de anúncios e fotos, em arquivo JSON. Não inclui contas de usuários, contatos privados nem propostas. Guarde o arquivo em local seguro.</p><button className="secondary full" disabled={busy} onClick={downloadBackup}>Baixar backup completo</button><input ref={backupInput} type="file" accept=".json,application/json" style={{display:'none'}} onChange={restoreBackup}/><button className="secondary full" disabled={busy} onClick={() => backupInput.current?.click()}>Restaurar anúncios do backup</button>{backupStatus && <p className="form-help" role="status">{backupStatus}</p>}<p className="form-help">Exclua anúncios de qualquer anunciante. Esta operação é permanente.</p><div className="my-listings">{listings.map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.city || ''} - {item.state || ''}</small></div><button type="button" className="delete-button" onClick={() => removeListing(item)}><Trash2 size={14}/> Excluir</button></div>)}</div></>}
       {modal === 'myListings' && <><span className="eyebrow dark">SUA GARAGEM</span><h2>Meus Anúncios</h2><p className="form-help">Gerencie seus veículos publicados. Você pode editar todas as informações e trocar as fotos.</p><div className="my-listings">{!listingsLoading && listings.filter(item => !item.demo && item.ownerUid === firebaseUser?.uid).map(item => <div className="my-listing-row" key={item.id}><img src={item.photoUrls?.[0] || 'https://placehold.co/120x90/eaf1ed/426354?text=Sem+foto'} alt=""/><div className="my-listing-info"><strong>{item.title}</strong><small>{item.price ? formatCurrency(item.price) : 'Sem valor informado'}</small>{listingYears(item) && <small>{listingYears(item)}</small>}<small>{item.city || ''}{item.state ? ` - ${item.state}` : ''}</small></div><button type="button" className="edit-button" onClick={() => openEditListing(item)}><Pencil size={14}/> Editar</button></div>)}{listingsLoading ? <div className="empty compact"><p>Carregando seus anúncios…</p></div> : !listings.some(item => !item.demo && item.ownerUid === firebaseUser?.uid) && <div className="empty compact"><CarFront size={30}/><h3>Você ainda não tem anúncios</h3><p>Seus veículos publicados aparecerão aqui.</p></div>}</div></>}
