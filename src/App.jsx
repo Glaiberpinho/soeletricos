@@ -355,7 +355,7 @@ function PromotionalVideo({ campaign, onClose }) {
   return <aside className="promo-video-float" aria-label="Vídeo promocional do Só Elétricos">
     <button type="button" className="promo-video-close" aria-label="Fechar vídeo promocional" onClick={onClose}><X size={19}/></button>
     <div className="promo-video-phone">
-      <video ref={videoRef} src={campaign.videoUrl} playsInline preload="metadata" controls
+      <video ref={videoRef} src={campaign.videoUrl} playsInline preload="metadata" controls controlsList="nodownload"
         onPlay={() => { setPlaying(true); setEnded(false) }} onPause={() => setPlaying(false)}
         onError={() => setBlocked(true)} onEnded={() => { setEnded(true); setPlaying(false) }} />
     </div>
