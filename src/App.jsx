@@ -402,18 +402,75 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 6000)
-    // Provedor externo recebe o IP da conexão; não acessamos GPS.
-    fetch('https://ipwho.is/', { signal: controller.signal })
-      .then(r => { if (!r.ok) throw new Error('Localização indisponível'); return r.json() })
-      .then(data => {
-        if (data.country_code !== 'BR' || !data.city || !data.region_code || data.error) return
-        setVisitorPlace({ city: data.city, state: data.region_code })
-      })
-      .catch(() => {})
-      .finally(() => clearTimeout(timeout))
-    return () => { clearTimeout(timeout); controller.abort() }
+    let active = true
+    const controllers = new Set()
+    async function fetchWithTimeout(url, milliseconds) {
+      const controller = new AbortController()
+      controllers.add(controller)
+      const timeout = setTimeout(() => controller.abort(), milliseconds)
+      try { return await fetch(url, { signal: controller.signal }) }
+      finally { clearTimeout(timeout); controllers.delete(controller) }
+    }
+
+    // Computador: continua usando somente a cidade aproximada do IP.
+    // Celular (inclusive deitado): solicita a localização nativa do navegador.
+    // Se houver recusa, bloqueio, tempo esgotado ou erro na consulta, volta ao IP.
+    const mobile = navigator.userAgentData?.mobile === true
+      || /Android|iPhone|iPod|iPad|Mobile|Windows Phone/i.test(navigator.userAgent || '')
+
+    async function locateByIp() {
+      try {
+        const response = await fetchWithTimeout('https://ipwho.is/', 6000)
+        if (!response.ok) throw new Error('Localização por IP indisponível')
+        const data = await response.json()
+        if (active && !data.error && data.country_code === 'BR' && data.city && /^[A-Z]{2}$/.test(data.region_code || '')) {
+          setVisitorPlace({ city: data.city, state: data.region_code })
+        }
+      } catch (error) {
+        if (active) console.warn('Não foi possível identificar a cidade por IP:', error)
+      }
+    }
+
+    async function locateByDevice(position) {
+      const { latitude, longitude } = position.coords
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false
+      // A consulta ocorre diretamente no navegador, sem gravar coordenadas no Firebase.
+      try {
+        const url = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client')
+        url.searchParams.set('latitude', String(latitude))
+        url.searchParams.set('longitude', String(longitude))
+        url.searchParams.set('localityLanguage', 'pt')
+        const response = await fetchWithTimeout(url.toString(), 7000)
+        if (!response.ok) return false
+        const data = await response.json()
+        const state = String(data.principalSubdivisionCode || '').replace(/^BR-/, '').toUpperCase()
+        const city = String(data.city || data.locality || '').trim()
+        if (!active || data.countryCode !== 'BR' || !/^[A-Z]{2}$/.test(state) || !city) return false
+        setVisitorPlace({ city, state })
+        return true
+      } catch (error) {
+        if (active) console.warn('Não foi possível identificar a cidade pelas coordenadas:', error)
+        return false
+      }
+    }
+
+    if (!mobile || !window.isSecureContext || !navigator.geolocation) {
+      locateByIp()
+    } else {
+      // O navegador apresenta sua própria janela de permissão, sem tela intermediária.
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          if (!active) return
+          locateByDevice(position).then(success => {
+            if (active && !success) locateByIp()
+          })
+        },
+        () => { if (active) locateByIp() },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+      )
+    }
+
+    return () => { active = false; controllers.forEach(controller => controller.abort()); controllers.clear() }
   }, [])
 
   useEffect(() => {
@@ -1133,7 +1190,7 @@ function App() {
     </section></div>}
 
     {modal && <div className="overlay" onClick={() => setModal('')}><section className="form-modal" onClick={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}><X/></button>
-      {modal === 'campaigns' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Gerenciar publicidade local</h2><p className="form-help">Cadastre imagens ou GIFs hospedados em um endereço HTTPS público. A cidade é identificada aproximadamente pelo IP do visitante, sem solicitar GPS. A imagem deve estar publicada, por exemplo, na pasta public/banners do GitHub Pages.</p>
+      {modal === 'campaigns' && isAdmin && <><span className="eyebrow dark">ADMINISTRAÇÃO</span><h2>Gerenciar publicidade local</h2><p className="form-help">Cadastre imagens ou GIFs hospedados em um endereço HTTPS público. No celular, a localização do aparelho é solicitada pelo navegador; se negada ou indisponível, usamos o IP. No computador, utilizamos o IP. A imagem deve estar publicada, por exemplo, na pasta public/banners do GitHub Pages.</p>
         <label>Anunciante</label><input value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Nome da empresa" maxLength={120}/>
         <CampaignLocationFields state={campaignState} setState={setCampaignState} city={campaignCity} setCity={setCampaignCity} />
         <label>Espaço publicitário</label><select value={campaignPosition} onChange={e => setCampaignPosition(e.target.value)}><option value="horizontal">Horizontal superior</option><option value="left">Lateral esquerda</option><option value="right">Lateral direita</option></select>
