@@ -7,6 +7,30 @@ import { auth, db, firebaseReady } from './firebase'
 import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, sendEmailVerification, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
 import { addDoc, collection, getDoc, getDocs, query, orderBy, serverTimestamp, deleteDoc, doc, setDoc, updateDoc, where, limit, startAfter, getCountFromServer, documentId, runTransaction, Timestamp } from 'firebase/firestore'
 
+// Mensagens amigáveis na interface; os detalhes técnicos permanecem no console.
+function friendlyError(error, fallback = 'Não foi possível concluir a operação. Tente novamente.') {
+  const code = String(error?.code || '')
+  if (code === 'permission-denied' || code.endsWith('/permission-denied'))
+    return 'Sua conta não tem autorização para realizar esta operação. Confira seu acesso e tente novamente.'
+  if (code === 'unavailable' || code.endsWith('/unavailable') || code === 'auth/network-request-failed')
+    return 'Não foi possível conectar ao serviço. Verifique sua internet e tente novamente.'
+  if (code === 'auth/too-many-requests' || code === 'resource-exhausted')
+    return 'Muitas tentativas em pouco tempo. Aguarde um pouco e tente novamente.'
+  if (code === 'auth/requires-recent-login')
+    return 'Por segurança, saia da conta, entre novamente e repita a operação.'
+  if (code === 'auth/weak-password')
+    return 'Escolha uma senha mais forte, com pelo menos 6 caracteres.'
+  if (code === 'auth/invalid-email')
+    return 'Informe um endereço de e-mail válido.'
+  if (code === 'auth/email-already-in-use')
+    return 'Este e-mail já está cadastrado. Faça login.'
+  // Erros de validação criados pelo próprio site já são textos seguros em português.
+  const message = String(error?.message || '')
+  if (!code && /^(Confirme seu e-mail|As fotos ultrapassaram|A foto |Não foi possível ler |O arquivo |Seu navegador não conseguiu|Entre com e-mail e senha)/.test(message))
+    return message
+  return fallback
+}
+
 const PAGE_SIZE = 18
 const CURRENT_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 1900 + 3 }, (_, i) => CURRENT_YEAR + 2 - i)
@@ -466,7 +490,7 @@ function App() {
 
   useEffect(() => {
     if (!firebaseReady) {
-      setNotice('Firebase não configurado. Configure as variáveis VITE_FIREBASE_* para carregar e publicar anúncios na nuvem.')
+      setNotice('Não foi possível iniciar o serviço de anúncios. Tente novamente mais tarde.')
       return
     }
     const unsubscribe = onAuthStateChanged(auth, current => {
@@ -475,7 +499,7 @@ function App() {
       setAuthLoaded(true)
       if (!current) signInAnonymously(auth).catch(error => {
         console.error(error)
-        setNotice('Não foi possível conectar ao Firebase. Verifique se o login anônimo está ativado.')
+        setNotice('Não foi possível conectar ao serviço de anúncios. Verifique sua internet e tente novamente.')
       })
     })
     return unsubscribe
@@ -606,7 +630,7 @@ function App() {
         }
       }
       setNotice(`${updated} anúncios indexados. Atualize a pesquisa.`)
-    } catch (error) { console.error(error); setNotice('Erro ao indexar. Confira as regras do Firestore.') }
+    } catch (error) { console.error(error); setNotice('Não foi possível atualizar a pesquisa dos anúncios. Tente novamente.') }
     finally { setBusy(false) }
   }
 
@@ -659,7 +683,7 @@ function App() {
         throw new Error('Arquivo não é um backup válido do Só Elétricos.')
       }
       if (new Set(payload.listings.map(x => x.id)).size !== payload.listings.length) throw new Error('IDs duplicados no backup.')
-      if (!confirm(`O arquivo contém ${payload.listings.length} anúncios. Restaurar SOMENTE os que não existem no Firebase? Anúncios atuais não serão apagados nem sobrescritos. A restauração consome gravações e pode ser retomada com o mesmo arquivo.`)) return
+      if (!confirm(`O arquivo contém ${payload.listings.length} anúncios. Restaurar SOMENTE os anúncios que ainda não estão no site? Anúncios atuais não serão apagados nem sobrescritos. A restauração consome gravações e pode ser retomada com o mesmo arquivo.`)) return
       let restored = 0, skipped = 0
       for (const item of payload.listings) {
         if (!item || typeof item.id !== 'string' || !/^[a-zA-Z0-9]{1,100}$/.test(item.id) ||
@@ -698,7 +722,7 @@ function App() {
       setResultsRevision(n => n + 1)
     } catch (error) {
       console.error(error)
-      setBackupStatus(`Restauração interrompida: ${error.message}. Você pode repetir o mesmo arquivo; anúncios existentes serão ignorados.`)
+      setBackupStatus(`Restauração interrompida: ${friendlyError(error, 'não foi possível recuperar todos os anúncios')}. Você pode repetir o mesmo arquivo; anúncios existentes serão ignorados.`)
     } finally { setBusy(false) }
   }
 
@@ -813,7 +837,7 @@ function App() {
         setNotice('Vídeo promocional cadastrado.')
       }
       resetPromoForm()
-    } catch (error) { console.error(error); setNotice('Não foi possível salvar o vídeo. Confira as regras da coleção videoCampaigns.') }
+    } catch (error) { console.error(error); setNotice('Não foi possível salvar o vídeo promocional. Confira os dados e tente novamente.') }
     finally { setBusy(false) }
   }
   async function changePromoVideo(c, active) {
@@ -893,10 +917,10 @@ function App() {
         const newCampaign = { ...data, active: true, createdBy: firebaseUser.uid, createdAt: serverTimestamp() }
         const ref = await addDoc(collection(db, 'campaigns'), newCampaign)
         setCampaigns(old => [...old, { ...newCampaign, id: ref.id }])
-        setNotice('Campanha cadastrada no Firebase.')
+        setNotice('Publicidade cadastrada com sucesso!')
       }
       resetCampaignForm()
-    } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Verifique as permissões da coleção campaigns no Firestore.') }
+    } catch (error) { console.error(error); setNotice('Não foi possível salvar a publicidade. Confira os dados e tente novamente.') }
     finally { setBusy(false) }
   }
 
@@ -1003,7 +1027,7 @@ function App() {
           } while (true)
         }
         if (requestId === resultRequest.current) { setResultTotal(total); setShown(found) }
-      } catch (error) { console.error(error); if (requestId === resultRequest.current) { setShown([]); setResultTotal(0); setNotice('Não foi possível pesquisar anúncios. Verifique os índices do Firestore.') } }
+      } catch (error) { console.error(error); if (requestId === resultRequest.current) { setShown([]); setResultTotal(0); setNotice('Não foi possível pesquisar anúncios. Tente novamente em instantes.') } }
       finally { if (requestId === resultRequest.current) setLoadingResults(false) }
     }, 250)
     return () => { clearTimeout(timeout); resultRequest.current++ }
@@ -1070,7 +1094,7 @@ function App() {
         : 'Conta criada, mas não foi possível enviar a confirmação. Use Reenviar confirmação para tentar novamente.')
     } catch (error) {
       console.error(error)
-      setNotice(error.code === 'auth/email-already-in-use' ? 'Este e-mail já está cadastrado. Faça login.' : `Não foi possível criar a conta: ${error.message}`)
+      setNotice(friendlyError(error, 'Não foi possível criar a conta. Verifique os dados e tente novamente.'))
     } finally { setBusy(false) }
   }
 
@@ -1086,22 +1110,22 @@ function App() {
       setEmail(''); setPassword('')
       setNotice(credential.user.uid !== ADMIN_UID && !credential.user.emailVerified
         ? 'Confirme seu e-mail para publicar anúncios. Caso não encontre a mensagem, solicite um novo link.'
-        : 'Login realizado! Seus anúncios estão vinculados à sua conta Firebase.')
+        : 'Login realizado com sucesso!')
     } catch (error) {
       console.error(error)
-      setNotice('Não foi possível entrar. Confira o e-mail e a senha da conta Firebase.')
+      setNotice('Não foi possível entrar. Confira o e-mail e a senha e tente novamente.')
     } finally { setBusy(false) }
   }
 
   async function logout() {
     try { await signOut(auth); setNotice('Você saiu da sua conta.') }
-    catch (error) { setNotice(`Não foi possível sair: ${error.message}`) }
+    catch (error) { console.error(error); setNotice(friendlyError(error, 'Não foi possível sair da conta. Tente novamente.')) }
   }
 
   async function publish() {
     if (!user || !firebaseUser || firebaseUser.isAnonymous) return setNotice('Entre ou crie uma conta com e-mail e senha para publicar anúncios.')
     if (needsEmailVerification) { setModal('verifyEmail'); return setNotice('Confirme seu e-mail antes de publicar anúncios.') }
-    if (!firebaseReady) return setNotice('Firebase não configurado. Não é possível publicar anúncios na nuvem.')
+    if (!firebaseReady) return setNotice('O serviço de publicação está indisponível. Tente novamente mais tarde.')
     if (!title.trim() || !description.trim()) return setNotice('Preencha o título e a descrição.')
     if (!manufactureYear || !modelYear) return setNotice('Selecione o ano de fabricação e o ano do modelo.')
     const numericPrice = Number(String(price).replace(/\D/g, ''))
@@ -1161,10 +1185,10 @@ function App() {
       }
       setTitle(''); setDescription(''); setPrice(''); setVehicleType('electric'); setManufactureYear(''); setModelYear(''); setPhotos([]); setPhotoPreviews([]); setUf(''); setCity(''); setModal('')
       await loadListings()
-      setNotice('Anúncio publicado! As fotos foram comprimidas e salvas no Firestore.')
+      setNotice('Anúncio publicado com sucesso!')
     } catch (error) {
       console.error(error)
-      setNotice(`Erro ao publicar: ${error?.message || 'verifique as configurações e regras do Firestore.'}`)
+      setNotice(friendlyError(error, 'Não foi possível publicar o anúncio. Confira os dados e tente novamente.'))
     } finally { setBusy(false) }
   }
 
@@ -1235,7 +1259,7 @@ function App() {
       setNotice('Anúncio atualizado com sucesso!')
     } catch (error) {
       console.error(error)
-      setNotice(`Não foi possível atualizar o anúncio: ${error?.message || 'verifique as regras do Firestore.'}`)
+      setNotice(friendlyError(error, 'Não foi possível atualizar o anúncio. Confira os dados e tente novamente.'))
     } finally { setBusy(false) }
   }
 
@@ -1280,7 +1304,7 @@ function App() {
       setNotice('Mensagem registrada! O sistema enviará seu e-mail ao anunciante em alguns minutos.')
     } catch (error) {
       console.error(error)
-      setNotice(`Não foi possível enviar a mensagem: ${error?.message || 'tente novamente.'}`)
+      setNotice(friendlyError(error, 'Não foi possível enviar a mensagem. Tente novamente.'))
     } finally { setBusy(false) }
   }
 
@@ -1301,11 +1325,11 @@ function App() {
       setPage(1)
       // Refaz busca, total e cursores de paginação sem exigir F5.
       setResultsRevision(current => current + 1)
-      setNotice('Anúncio excluído do Firebase.')
+      setNotice('Anúncio excluído com sucesso!')
       await loadListings()
     } catch (error) {
       console.error(error)
-      setNotice(`Não foi possível excluir: ${error?.message || 'erro no Firebase'}`)
+      setNotice(friendlyError(error, 'Não foi possível excluir o anúncio. Tente novamente.'))
     } finally {
       setBusy(false)
     }
@@ -1381,7 +1405,7 @@ function App() {
         <label>Nome da campanha</label><input value={promoName} maxLength={120} onChange={e => setPromoName(e.target.value)} placeholder="Ex.: Apresentação Só Elétricos"/>
         <CampaignLocationFields state={promoState} setState={setPromoState} city={promoCity} setCity={setPromoCity}/>
         <label>Link HTTPS direto do vídeo MP4</label><input type="url" value={promoUrl} onChange={e => setPromoUrl(e.target.value)} placeholder="https://www.soeletricosbrasil.com.br/videos/promocional.mp4"/>
-        <p className="form-help">Hospede um MP4 comprimido em public/videos no GitHub. O Firebase armazenará somente o endereço, não o vídeo.</p>
+        <p className="form-help">Hospede um vídeo MP4 comprimido na pasta public/videos do site. No cadastro, informe o endereço do vídeo.</p>
         <div className="two-fields"><div><label>Início (opcional)</label><input type="date" value={promoStart} onChange={e => setPromoStart(e.target.value)}/></div><div><label>Fim (opcional)</label><input type="date" value={promoEnd} onChange={e => setPromoEnd(e.target.value)}/></div></div>
         <button className="primary full" disabled={busy} onClick={savePromoVideo}>{busy ? 'Salvando...' : editingPromoId ? 'Salvar alterações do vídeo' : 'Cadastrar vídeo promocional'}</button>
         {editingPromoId && <button type="button" className="secondary full" disabled={busy} onClick={resetPromoForm}>Cancelar edição</button>}
@@ -1395,13 +1419,13 @@ function App() {
       {modal === 'verifyEmail' && user && <>
         <span className="eyebrow dark">SEGURANÇA DA CONTA</span>
         <h2>Confirme seu e-mail</h2>
-        <p className="form-help">Para anunciar no Só Elétricos, confirme que você tem acesso ao endereço <strong>{user.email}</strong>. Abra o link enviado pelo Firebase e depois volte aqui.</p>
+        <p className="form-help">Para anunciar no Só Elétricos, confirme que você tem acesso ao endereço <strong>{user.email}</strong>. Abra o link enviado para seu e-mail e depois volte aqui.</p>
         <p className="form-help">Verifique também a pasta de spam ou lixo eletrônico. Os anúncios existentes não serão apagados.</p>
         <button className="primary full" disabled={verificationSending} onClick={checkEmailVerification}>{verificationSending ? 'Verificando...' : 'Já confirmei meu e-mail'}</button>
         <button className="secondary full" disabled={verificationSending} onClick={resendVerification}>{verificationSending ? 'Aguarde...' : 'Reenviar e-mail de confirmação'}</button>
         <button className="secondary full" onClick={logout}>Sair da conta</button>
       </>}
-      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta fica protegida pelo Firebase e funciona em qualquer navegador. Use a mesma senha em todos os dispositivos.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
+      {modal === 'auth' && <><span className="eyebrow dark">BEM-VINDO AO SÓ ELÉTRICOS</span><h2>Entre ou crie sua conta</h2><p className="form-help">Sua conta é protegida e pode ser acessada em diferentes dispositivos usando o mesmo e-mail e senha.</p><label>E-mail</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@email.com"/><label>Senha</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo de 6 caracteres"/><button className="primary full" disabled={busy} onClick={login}>Entrar</button><button className="secondary full" disabled={busy} onClick={register}>Criar conta</button><button className="secondary full" onClick={recoverPassword}>Esqueci minha senha</button></>}
       {modal === 'publish' && <><span className="eyebrow dark">ANUNCIE GRÁTIS</span><h2>Cadastre seu veículo</h2><p className="form-help">Até 4 fotos, comprimidas automaticamente para economizar espaço. O limite total das imagens é de 700 KB por anúncio.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={publish}>{busy ? 'Salvando...' : 'Publicar anúncio'}</button></>}
       {modal === 'edit' && <><span className="eyebrow dark">ATUALIZE SEU ANÚNCIO</span><h2>Editar veículo</h2><p className="form-help">Altere os dados e substitua ou remova as fotos. As mudanças serão aplicadas ao anúncio publicado.</p><label>Fotos (até 4, anexadas individualmente)</label><div className="photo-slots">{[0,1,2,3].map(index => <div className="photo-slot" key={index}><label className="upload-area"><ImagePlus size={17}/><span>{photoPreviews[index] ? `Trocar foto ${index + 1}` : `Anexar foto ${index + 1}`}</span><input type="file" accept="image/*" onChange={e => { addPhotoAt(index, e.target.files?.[0]); e.target.value = '' }}/></label>{photoPreviews[index] && <div className="photo-preview"><img src={photoPreviews[index]} alt={`Prévia da foto ${index + 1}`}/><button type="button" onClick={() => removePhotoAt(index)} aria-label={`Remover foto ${index + 1}`}><X size={14}/></button></div>}</div>)}</div><small className="file-list">{photos.filter(Boolean).length} de 4 fotos selecionadas</small><ListingLocationFields uf={uf} setUf={setUf} city={city} setCity={setCity} statesList={statesList} citiesList={citiesList} citiesLoading={citiesLoading} /><label>Tipo de veículo</label><div className="two-fields" style={{marginBottom: 12}}><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="electric" checked={vehicleType === 'electric'} onChange={() => setVehicleType('electric')} style={{width: 'auto'}}/> Elétrico</label><label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'}}><input type="radio" name="vehicleType" value="hybrid" checked={vehicleType === 'hybrid'} onChange={() => setVehicleType('hybrid')} style={{width: 'auto'}}/> Híbrido</label></div><YearFields manufactureYear={manufactureYear} setManufactureYear={setManufactureYear} modelYear={modelYear} setModelYear={setModelYear}/><label>Título do anúncio</label><input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: BYD Dolphin Plus 2025"/><label>Valor do veículo (R$)</label><input inputMode="numeric" type="text" autoComplete="off" value={price} onChange={e => setPrice(formatPriceEditing(e.target.value))} placeholder="Ex.: 129.900"/><label>Descrição</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="5" placeholder="Descreva o veículo, ano, quilometragem, autonomia, estado de conservação..."/><button className="primary full" disabled={busy} onClick={saveListingChanges}>{busy ? 'Salvando...' : 'Salvar alterações'}</button></>}
     </section></div>}
